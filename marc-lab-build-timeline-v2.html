@@ -1,0 +1,969 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MARC LAB — Build Timeline v2</title>
+<link href="https://fonts.googleapis.com/css2?family=Oxanium:wght@300;400;600;700;800&family=Inconsolata:wght@300;400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #07080a;
+    --panel: #0d0f12;
+    --panel2: #13161a;
+    --border: rgba(255,255,255,0.06);
+    --border-bright: rgba(255,255,255,0.12);
+
+    --gel:   #39ff8a;
+    --fluo:  #ffdd00;
+    --pot:   #ff7b00;
+    --pcr:   #ff3c6e;
+    --cent:  #b06eff;
+    --chip:  #00bfff;
+    --cap:   #ffffff;
+
+    --text: #dde2ea;
+    --muted: #555f6e;
+    --mono: 'Inconsolata', monospace;
+    --display: 'Oxanium', sans-serif;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--display);
+    font-weight: 300;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  body::after {
+    content:'';
+    position:fixed;
+    inset:0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.07) 2px, rgba(0,0,0,0.07) 4px);
+    pointer-events:none;
+    z-index:1000;
+  }
+
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 0 28px 80px; }
+
+  /* HEADER */
+  header { padding: 56px 0 40px; border-bottom: 1px solid var(--border-bright); margin-bottom: 52px; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 5px;
+    color: var(--gel);
+    text-transform: uppercase;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .eyebrow::after { content:''; flex:1; height:1px; background: linear-gradient(90deg, var(--gel), transparent); opacity:0.4; }
+
+  h1 { font-size: clamp(52px, 9vw, 96px); font-weight: 800; line-height: 0.92; letter-spacing: -1px; color: #fff; }
+  h1 em { font-style: normal; color: var(--gel); }
+
+  .tagline { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 18px; letter-spacing: 1px; line-height: 1.7; max-width: 580px; }
+
+  .header-meta { display: flex; gap: 28px; margin-top: 28px; flex-wrap: wrap; }
+  .hm { display: flex; flex-direction: column; gap: 3px; }
+  .hm-l { font-family: var(--mono); font-size: 9px; letter-spacing: 3px; color: var(--muted); text-transform: uppercase; }
+  .hm-v { font-family: var(--mono); font-size: 13px; color: var(--gel); font-weight: 700; }
+
+  /* SECTION TITLES */
+  .sec-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 4px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .sec-title::before { content: attr(data-n); color: var(--gel); font-size: 9px; }
+  .sec-title::after { content:''; flex:1; height:1px; background: var(--border-bright); }
+
+  /* LEGEND */
+  .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 40px; }
+  .leg { display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 1px; }
+  .leg-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+  /* GANTT */
+  .gantt-wrap { background: var(--panel); border: 1px solid var(--border-bright); border-radius: 3px; overflow: hidden; margin-bottom: 16px; }
+  .gantt-header { display: grid; grid-template-columns: 180px repeat(16, 1fr); border-bottom: 1px solid var(--border-bright); background: var(--panel2); }
+  .gh-label { padding: 10px 14px; font-family: var(--mono); font-size: 9px; letter-spacing: 2px; color: var(--muted); text-transform: uppercase; border-right: 1px solid var(--border); }
+  .gh-week { padding: 10px 4px; font-family: var(--mono); font-size: 8px; color: var(--muted); text-align: center; border-right: 1px solid var(--border); }
+  .gh-week.ms { border-right: 1px solid var(--border-bright); color: var(--text); opacity: 0.6; }
+
+  .gantt-month-label { display: grid; grid-template-columns: 180px repeat(16, 1fr); background: rgba(255,255,255,0.02); border-bottom: 1px solid var(--border-bright); }
+  .gml-skip { border-right: 1px solid var(--border-bright); }
+  .gml-cell { padding: 5px 6px; font-family: var(--mono); font-size: 8px; letter-spacing: 2px; color: var(--muted); text-transform: uppercase; text-align: center; border-right: 1px solid var(--border); }
+
+  .gantt-row { display: grid; grid-template-columns: 180px repeat(16, 1fr); border-bottom: 1px solid var(--border); min-height: 40px; align-items: center; }
+  .gantt-row:last-child { border-bottom: none; }
+  .gantt-row:hover { background: rgba(255,255,255,0.015); }
+
+  .gr-label { padding: 8px 14px; font-family: var(--mono); font-size: 10px; font-weight: 700; border-right: 1px solid var(--border-bright); display: flex; align-items: center; gap: 7px; line-height: 1.3; }
+  .gr-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .gr-cell { height: 100%; border-right: 1px solid var(--border); position: relative; }
+  .gr-cell.ms { border-right: 1px solid var(--border-bright); }
+
+  .bar { position: absolute; top: 50%; transform: translateY(-50%); height: 14px; border-radius: 2px; }
+  .bar-design { background: repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(0,0,0,0.3) 3px, rgba(0,0,0,0.3) 6px); border: 1px solid currentColor; opacity: 0.65; }
+  .bar-source { opacity: 0.4; }
+  .bar-build { opacity: 1; }
+  .bar-fade { opacity: 0.45; }
+
+  /* INSTRUMENT CARDS */
+  .instrument-cards { display: flex; flex-direction: column; gap: 28px; margin-bottom: 52px; }
+
+  .icard { border: 1px solid var(--border-bright); border-radius: 3px; overflow: hidden; background: var(--panel); }
+
+  .icard-head {
+    padding: 18px 22px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .icard-title-col { display: flex; flex-direction: column; gap: 5px; }
+  .icard-num { font-family: var(--mono); font-size: 9px; color: var(--muted); letter-spacing: 3px; }
+  .icard-name { font-size: 20px; font-weight: 800; letter-spacing: 1px; }
+  .icard-sub { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 1px; margin-top: 2px; }
+
+  .icard-badges { display: flex; flex-direction: column; gap: 5px; align-items: flex-end; flex-shrink: 0; }
+  .badge {
+    font-family: var(--mono);
+    font-size: 9px;
+    padding: 3px 9px;
+    border-radius: 2px;
+    letter-spacing: 1px;
+    white-space: nowrap;
+    border: 1px solid currentColor;
+    opacity: 0.75;
+  }
+
+  /* Three column layout for main content */
+  .icard-body { display: grid; grid-template-columns: 1fr 1fr; }
+  .icard-col { padding: 18px 20px; border-right: 1px solid var(--border); }
+  .icard-col:last-child { border-right: none; }
+
+  .col-head { font-family: var(--mono); font-size: 9px; letter-spacing: 3px; color: var(--muted); text-transform: uppercase; margin-bottom: 12px; }
+
+  .task { display: flex; gap: 9px; font-family: var(--mono); font-size: 11px; color: var(--text); opacity: 0.8; line-height: 1.55; margin-bottom: 8px; align-items: flex-start; }
+  .task-arrow { flex-shrink: 0; margin-top: 1px; }
+
+  .deadline-line { margin-top: 12px; }
+  .deadline {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 9px;
+    padding: 3px 8px;
+    border-radius: 2px;
+    letter-spacing: 1px;
+    border: 1px solid currentColor;
+    opacity: 0.7;
+  }
+
+  /* MODS SECTION — full width below */
+  .icard-mods {
+    border-top: 1px solid var(--border-bright);
+    padding: 18px 22px;
+    background: rgba(255,255,255,0.015);
+  }
+
+  .mods-head {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 3px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .mods-head::after { content:''; flex:1; height:1px; background: var(--border); }
+
+  .mods-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+
+  .mod-item {
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    padding: 12px 14px;
+    border-left: 2px solid currentColor;
+    transition: border-color 0.2s;
+  }
+
+  .mod-tag {
+    font-family: var(--mono);
+    font-size: 8px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 5px;
+    opacity: 0.7;
+  }
+
+  .mod-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+
+  .mod-desc {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    line-height: 1.55;
+  }
+
+  /* CAPSTONE */
+  .capstone-block {
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 3px;
+    background: linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
+    padding: 32px;
+    margin-bottom: 52px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .capstone-block::before {
+    content: 'BREAKTHROUGH';
+    position: absolute;
+    top: 0;
+    right: 24px;
+    font-family: var(--mono);
+    font-size: 8px;
+    letter-spacing: 4px;
+    background: #fff;
+    color: #000;
+    padding: 3px 10px;
+    font-weight: 700;
+  }
+
+  .cap-title { font-size: clamp(20px, 3vw, 30px); font-weight: 800; color: #fff; letter-spacing: 1px; margin-bottom: 8px; line-height: 1.1; }
+  .cap-sub { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-bottom: 24px; line-height: 1.7; max-width: 680px; }
+
+  .cap-pillars { display: grid; grid-template-columns: repeat(auto-fill, minmax(155px, 1fr)); gap: 10px; margin-bottom: 24px; }
+  .cap-pillar { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 2px; padding: 12px 14px; }
+  .cp-name { font-family: var(--mono); font-size: 9px; letter-spacing: 2px; color: var(--gel); text-transform: uppercase; margin-bottom: 5px; }
+  .cp-desc { font-family: var(--mono); font-size: 10px; color: var(--muted); line-height: 1.5; }
+
+  .cap-timeline { display: flex; gap: 0; border: 1px solid rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden; }
+  .ct-seg { flex: 1; padding: 12px 14px; border-right: 1px solid rgba(255,255,255,0.08); }
+  .ct-seg:last-child { border-right: none; }
+  .ct-label { font-family: var(--mono); font-size: 8px; letter-spacing: 2px; color: var(--muted); text-transform: uppercase; margin-bottom: 5px; }
+  .ct-desc { font-family: var(--mono); font-size: 10px; color: var(--text); opacity: 0.65; line-height: 1.5; }
+
+  /* BUDGET */
+  .budget-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11px; margin-bottom: 52px; }
+  .budget-table th { padding: 10px 14px; text-align: left; font-size: 9px; letter-spacing: 2px; color: var(--muted); text-transform: uppercase; border-bottom: 1px solid var(--border-bright); }
+  .budget-table td { padding: 9px 14px; border-bottom: 1px solid var(--border); color: var(--text); opacity: 0.8; }
+  .budget-table tr:hover td { background: rgba(255,255,255,0.02); }
+  .budget-table .right { text-align: right; }
+  .budget-table .total td { border-top: 1px solid var(--border-bright); border-bottom: none; color: var(--gel); font-weight: 700; opacity: 1; }
+  .col-dot-cell { display: flex; align-items: center; gap: 8px; }
+
+  /* TONIGHT */
+  .tonight { border: 1px solid var(--gel); border-radius: 3px; padding: 24px; background: rgba(57,255,138,0.03); margin-bottom: 52px; }
+  .tonight-title { font-family: var(--mono); font-size: 10px; letter-spacing: 4px; color: var(--gel); text-transform: uppercase; margin-bottom: 16px; }
+  .tonight-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .tg-block { background: rgba(57,255,138,0.04); border: 1px solid rgba(57,255,138,0.1); border-radius: 2px; padding: 14px; }
+  .tg-head { font-family: var(--mono); font-size: 10px; color: var(--gel); font-weight: 700; margin-bottom: 10px; letter-spacing: 1px; }
+  .tg-item { font-family: var(--mono); font-size: 10px; color: var(--text); opacity: 0.75; line-height: 1.6; margin-bottom: 5px; display: flex; gap: 7px; }
+  .tg-item::before { content: '→'; color: var(--gel); flex-shrink:0; }
+
+  .note { background: rgba(255,221,0,0.04); border-left: 2px solid var(--fluo); padding: 12px 16px; margin-top: 14px; font-family: var(--mono); font-size: 11px; color: var(--muted); line-height: 1.6; }
+  .note strong { color: var(--fluo); display: block; margin-bottom: 3px; font-size: 9px; letter-spacing: 2px; text-transform: uppercase; }
+
+  footer { border-top: 1px solid var(--border-bright); padding: 24px 0 0; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  .ft { font-family: var(--mono); font-size: 9px; letter-spacing: 2px; color: var(--muted); }
+  .ft span { color: var(--gel); }
+
+  @media(max-width:680px) {
+    .icard-body, .tonight-grid { grid-template-columns: 1fr; }
+    .icard-col { border-right: none; border-bottom: 1px solid var(--border); }
+    .cap-pillars { grid-template-columns: 1fr 1fr; }
+    .cap-timeline { flex-direction: column; }
+    .gantt-wrap { overflow-x: auto; }
+    .mods-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">Marc Lab — Build Plan v2.0</div>
+    <h1>FULL<br>BUILD<br><em>TIMELINE</em></h1>
+    <p class="tagline">// Instrument suite + AI-directed CRISPR capstone<br>// May 2026 → May 2027 · overlapping design, source, build · with mods + additions per instrument</p>
+    <div class="header-meta">
+      <div class="hm"><span class="hm-l">Start</span><span class="hm-v">May 16, 2026</span></div>
+      <div class="hm"><span class="hm-l">Capstone End</span><span class="hm-v">May 2027</span></div>
+      <div class="hm"><span class="hm-l">Instruments</span><span class="hm-v">5 Builds</span></div>
+      <div class="hm"><span class="hm-l">Est. Total</span><span class="hm-v">$850–$1,750</span></div>
+      <div class="hm"><span class="hm-l">Status</span><span class="hm-v" style="color:var(--gel)">DAY 1</span></div>
+    </div>
+  </header>
+
+  <!-- LEGEND -->
+  <div class="sec-title" data-n="00">Legend</div>
+  <div class="legend">
+    <div class="leg"><div class="leg-dot" style="background:var(--gel)"></div><span style="color:var(--gel)">GEL + IMAGING STATION</span></div>
+    <div class="leg"><div class="leg-dot" style="background:var(--fluo)"></div><span style="color:var(--fluo)">FLUORIMETER</span></div>
+    <div class="leg"><div class="leg-dot" style="background:var(--pot)"></div><span style="color:var(--pot)">POTENTIOSTAT</span></div>
+    <div class="leg"><div class="leg-dot" style="background:var(--pcr)"></div><span style="color:var(--pcr)">qPCR THERMOCYCLER</span></div>
+    <div class="leg"><div class="leg-dot" style="background:var(--cent)"></div><span style="color:var(--cent)">CENTRIFUGE</span></div>
+    <div class="leg"><div class="leg-dot" style="background:var(--chip)"></div><span style="color:var(--chip)">MICROFLUIDIC CHIP</span></div>
+    <div class="leg"><div class="leg-dot" style="background:#fff; opacity:0.5"></div><span style="opacity:0.5">CAPSTONE SYSTEM</span></div>
+  </div>
+
+  <!-- GANTT -->
+  <div class="sec-title" data-n="01">Master Schedule — Summer 2026</div>
+  <div class="gantt-wrap">
+    <div class="gantt-month-label">
+      <div class="gml-skip"></div>
+      <div class="gml-cell" style="grid-column:span 4">MAY</div>
+      <div class="gml-cell" style="grid-column:span 4">JUNE</div>
+      <div class="gml-cell" style="grid-column:span 5">JULY</div>
+      <div class="gml-cell" style="grid-column:span 3">AUGUST</div>
+    </div>
+    <div class="gantt-header">
+      <div class="gh-label">PROJECT</div>
+      <div class="gh-week">W1</div><div class="gh-week">W2</div><div class="gh-week">W3</div><div class="gh-week ms">W4</div>
+      <div class="gh-week">W5</div><div class="gh-week">W6</div><div class="gh-week">W7</div><div class="gh-week ms">W8</div>
+      <div class="gh-week">W9</div><div class="gh-week">W10</div><div class="gh-week">W11</div><div class="gh-week">W12</div><div class="gh-week ms">W13</div>
+      <div class="gh-week">W14</div><div class="gh-week">W15</div><div class="gh-week ms">W16</div>
+    </div>
+
+    <!-- GEL + IMAGING (combined) -->
+    <div class="gantt-row">
+      <div class="gr-label"><div class="gr-dot" style="background:var(--gel)"></div><span style="color:var(--gel)">GEL + IMAGING</span></div>
+      <div class="gr-cell" style="position:relative; grid-column:span 3;">
+        <div class="bar bar-design" style="background:var(--gel); left:4%; width:92%; color:var(--gel);"></div>
+      </div>
+      <div class="gr-cell ms" style="position:relative; grid-column:span 2;">
+        <div class="bar bar-source" style="background:var(--gel); left:4%; width:92%;"></div>
+      </div>
+      <div class="gr-cell" style="position:relative; grid-column:span 3;">
+        <div class="bar bar-build" style="background:var(--gel); left:4%; width:92%;"></div>
+      </div>
+      <div class="gr-cell ms"></div><div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell ms"></div>
+      <div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell ms"></div>
+    </div>
+
+    <!-- CENTRIFUGE -->
+    <div class="gantt-row">
+      <div class="gr-label"><div class="gr-dot" style="background:var(--cent)"></div><span style="color:var(--cent)">CENTRIFUGE</span></div>
+      <div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell"></div>
+      <div class="gr-cell ms" style="position:relative; grid-column:span 3;">
+        <div class="bar bar-source" style="background:var(--cent); left:4%; width:92%;"></div>
+      </div>
+      <div class="gr-cell" style="position:relative; grid-column:span 2;">
+        <div class="bar bar-build" style="background:var(--cent); left:4%; width:92%;"></div>
+      </div>
+      <div class="gr-cell ms"></div><div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell ms"></div>
+      <div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell ms"></div>
+    </div>
+
+    <!-- FLUORIMETER -->
+    <div class="gantt-row">
+      <div class="gr-label"><div class="gr-dot" style="background:var(--fluo)"></div><span style="color:var(--fluo)">FLUORIMETER</span></div>
+      <div class="gr-cell"></div><div class="gr-cell"></div>
+      <div class="gr-cell" style="position:relative; grid-column:span 4;">
+        <div class="bar bar-design" style="background:var(--fluo); left:4%; width:92%; color:var(--fluo);"></div>
+      </div>
+      <div class="gr-cell ms" style="position:relative; grid-column:span 2;">
+        <div class="bar bar-source" style="background:var(--fluo); left:4%; width:92%;"></div>
+      </div>
+      <div class="gr-cell" style="position:relative; grid-column:span 3;">
+        <div class="bar bar-build" style="background:var(--fluo); left:4%; width:92%;"></div>
+      </div>
+      <div class="gr-cell ms"></div><div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell ms"></div>
+    </div>
+
+    <!-- POTENTIOSTAT -->
+    <div class="gantt-row">
+      <div class="gr-label"><div class="gr-dot" style="background:var(--pot)"></div><span style="color:var(--pot)">POTENTIOSTAT</span></div>
+      <div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell ms"></div>
+      <div class="gr-cell" style="position:relative; grid-column:span 4;">
+        <div class="bar bar-design" style="background:var(--pot); left:4%; width:92%; color:var(--pot);"></div>
+      </div>
+      <div class="gr-cell ms" style="position:relative; grid-column:span 2;">
+        <div class="bar bar-source" style="background:var(--pot); left:4%; width:92%;"></div>
+      </div>
+      <div class="gr-cell" style="position:relative; grid-column:span 3;">
+        <div class="bar bar-build" style="background:var(--pot); left:4%; width:92%;"></div>
+      </div>
+      <div class="gr-cell ms"></div><div class="gr-cell"></div><div class="gr-cell ms"></div>
+    </div>
+
+    <!-- qPCR -->
+    <div class="gantt-row">
+      <div class="gr-label"><div class="gr-dot" style="background:var(--pcr)"></div><span style="color:var(--pcr)">qPCR CYCLER</span></div>
+      <div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell ms"></div><div class="gr-cell"></div>
+      <div class="gr-cell" style="position:relative; grid-column:span 5;">
+        <div class="bar bar-design" style="background:var(--pcr); left:4%; width:92%; color:var(--pcr);"></div>
+      </div>
+      <div class="gr-cell ms" style="position:relative; grid-column:span 2;">
+        <div class="bar bar-source" style="background:var(--pcr); left:4%; width:92%;"></div>
+      </div>
+      <div class="gr-cell" style="position:relative; grid-column:span 3;">
+        <div class="bar bar-fade" style="background:var(--pcr); left:4%; width:92%;"></div>
+      </div>
+      <div class="gr-cell ms"></div>
+    </div>
+
+    <!-- CHIP -->
+    <div class="gantt-row">
+      <div class="gr-label"><div class="gr-dot" style="background:var(--chip)"></div><span style="color:var(--chip)">μFLUIDIC CHIP</span></div>
+      <div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell ms"></div>
+      <div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell ms"></div>
+      <div class="gr-cell" style="position:relative; grid-column:span 5;">
+        <div class="bar bar-design" style="background:var(--chip); left:4%; width:92%; color:var(--chip);"></div>
+      </div>
+      <div class="gr-cell ms" style="position:relative; grid-column:span 3;">
+        <div class="bar bar-fade" style="background:var(--chip); left:4%; width:92%;"></div>
+      </div>
+    </div>
+
+    <!-- CAPSTONE -->
+    <div class="gantt-row" style="background:rgba(255,255,255,0.01);">
+      <div class="gr-label"><div class="gr-dot" style="background:#fff; opacity:0.4"></div><span style="color:var(--muted)">CAPSTONE SYS</span></div>
+      <div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell ms"></div>
+      <div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell ms"></div>
+      <div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell"></div><div class="gr-cell ms"></div>
+      <div class="gr-cell" style="position:relative; grid-column:span 3;">
+        <div class="bar bar-design" style="background:#fff; opacity:0.2; left:4%; width:92%;"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note" style="margin-bottom:52px;">
+    <strong>Chart key</strong>
+    Hatched = design phase · Faded solid = sourcing/ordering · Bright solid = active build/validate · Dim bars at W16 continue into fall semester. Overlap is intentional.
+  </div>
+
+  <!-- INSTRUMENT CARDS -->
+  <div class="sec-title" data-n="02">Instrument Detail + Modifications</div>
+  <div class="instrument-cards">
+
+    <!-- 01 GEL + IMAGING -->
+    <div class="icard">
+      <div class="icard-head">
+        <div class="icard-title-col">
+          <span class="icard-num">INSTRUMENT 01</span>
+          <span class="icard-name" style="color:var(--gel)">Integrated Gel + Imaging Station</span>
+          <span class="icard-sub">Combined electrophoresis box · blue LED transilluminator · Pi camera · timelapse system</span>
+        </div>
+        <div class="icard-badges">
+          <span class="badge" style="color:var(--gel)">DESIGN: TONIGHT → W3</span>
+          <span class="badge" style="color:var(--gel)">SOURCE: W3–W4</span>
+          <span class="badge" style="color:var(--gel)">BUILD: W4–W7</span>
+          <span class="badge" style="color:var(--gel)">FIRST GEL: END W7</span>
+        </div>
+      </div>
+      <div class="icard-body">
+        <div class="icard-col">
+          <div class="col-head">Design Tasks</div>
+          <div class="task"><span class="task-arrow" style="color:var(--gel)">→</span>CAD unified enclosure — gel box cavity at bottom, lightproof imaging hood permanently integrated on top. Hinged lid for gel loading, Pi camera port in the roof, amber filter slide-slot</div>
+          <div class="task"><span class="task-arrow" style="color:var(--gel)">→</span>Electrode slots in side walls — platinum or stainless wire, banana jack connectors on exterior for bench PSU hookup</div>
+          <div class="task"><span class="task-arrow" style="color:var(--gel)">→</span>Blue LED transilluminator tray — sits under gel, snap-fits into base. Resin-printed diffuser layer to even illumination</div>
+          <div class="task"><span class="task-arrow" style="color:var(--gel)">→</span>Print gel combs — 8-tooth and 16-tooth variants, parametric design so you can regenerate for any tooth width</div>
+          <div class="task"><span class="task-arrow" style="color:var(--gel)">→</span>Pi camera mount — fixed focal length, centered over gel area. No adjustments needed once set</div>
+          <div class="task"><span class="task-arrow" style="color:var(--gel)">→</span>Python timelapse script — captures frame every N seconds, stitches to GIF or MP4 on completion, saves with run metadata</div>
+          <div class="deadline-line"><span class="deadline" style="color:var(--gel); border-color:var(--gel)">CAD COMPLETE: END W3 · FIRST GEL: END W7</span></div>
+        </div>
+        <div class="icard-col">
+          <div class="col-head">Source + Build</div>
+          <div class="task"><span class="task-arrow" style="color:var(--gel)">→</span>Agarose (50g), SYBR Safe (20mL), 50× TAE stock, 1kb ladder, 6× loading dye — all from Amazon or Carolina Bio</div>
+          <div class="task"><span class="task-arrow" style="color:var(--gel)">→</span>Blue LED transilluminator: $30–50 AliExpress or MiniPCR SafeBlue clone. Or build your own with blue LED strip + diffuser for ~$10</div>
+          <div class="task"><span class="task-arrow" style="color:var(--gel)">→</span>Amber filter sheet: ~$8. Cut to size for camera port</div>
+          <div class="task"><span class="task-arrow" style="color:var(--gel)">→</span>Raspberry Pi camera v2 or HQ camera module. Reuse existing Pi Zero 2W if you have it</div>
+          <div class="task"><span class="task-arrow" style="color:var(--gel)">→</span>Bench PSU for electrophoresis: 300V, 500mA — used lab PSU on eBay ~$30–60. Confirm current limiting before first run</div>
+          <div class="task"><span class="task-arrow" style="color:var(--gel)">→</span>First run: 1% agarose, 1kb ladder only. Confirm bands. Then run your first real sample</div>
+          <div class="task"><span class="task-arrow" style="color:var(--gel)">→</span>Push all CAD, scripts, and first gel image to GitHub on day of first successful run</div>
+        </div>
+      </div>
+      <div class="icard-mods">
+        <div class="mods-head" style="color:var(--gel)">Modifications + Future Additions</div>
+        <div class="mods-grid">
+          <div class="mod-item" style="color:var(--gel); border-left-color:var(--gel);">
+            <div class="mod-tag" style="color:var(--gel)">⭐ Flagship Mod</div>
+            <div class="mod-title">Timelapse Band Migration</div>
+            <div class="mod-desc">Pi camera captures frame every 30–60s during a run. Python stitches to MP4. You get a full visual of band separation. Incredibly useful for optimizing run conditions and genuinely cool to share.</div>
+          </div>
+          <div class="mod-item" style="color:var(--gel); border-left-color:var(--gel);">
+            <div class="mod-tag" style="color:var(--gel)">Enhancement</div>
+            <div class="mod-title">Auto Band Detection</div>
+            <div class="mod-desc">OpenCV on Pi: detect band positions in real-time, calculate approximate molecular weight from ladder lane, output a simple band report. Turns your gel imager into a semi-quantitative analyzer.</div>
+          </div>
+          <div class="mod-item" style="color:var(--gel); border-left-color:var(--gel);">
+            <div class="mod-tag" style="color:var(--gel)">Enhancement</div>
+            <div class="mod-title">Auto-Stop by Band Position</div>
+            <div class="mod-desc">Pi monitors band migration in real time. When target band reaches optimal position, Pi triggers a relay to cut power. No more overrunning gels. Genuinely useful QoL feature.</div>
+          </div>
+          <div class="mod-item" style="color:var(--gel); border-left-color:var(--gel);">
+            <div class="mod-tag" style="color:var(--gel)">Addition</div>
+            <div class="mod-title">2D Gel Capability</div>
+            <div class="mod-desc">Design a second electrode axis perpendicular to the first. Rotate gel 90° mid-run for 2D electrophoresis. Serious analytical upgrade, relatively simple mechanical addition.</div>
+          </div>
+          <div class="mod-item" style="color:var(--gel); border-left-color:var(--gel);">
+            <div class="mod-tag" style="color:var(--gel)">Addition</div>
+            <div class="mod-title">Remote Monitoring via Discord</div>
+            <div class="mod-desc">Hook Pi timelapse into your OpenClaw bot — post a frame to Discord every 5 min during a run so you can monitor from anywhere. Gels run overnight while you sleep.</div>
+          </div>
+          <div class="mod-item" style="color:var(--gel); border-left-color:var(--gel);">
+            <div class="mod-tag" style="color:var(--gel)">Long Term</div>
+            <div class="mod-title">Fluorescence Gel Staining Mode</div>
+            <div class="mod-desc">Swap transilluminator for UV if needed, or add a second green LED channel for ethidium-free stains like GelRed. Modular LED tray makes this a print-and-swap upgrade.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 02 CENTRIFUGE -->
+    <div class="icard">
+      <div class="icard-head">
+        <div class="icard-title-col">
+          <span class="icard-num">INSTRUMENT 02</span>
+          <span class="icard-name" style="color:var(--cent)">Microcentrifuge</span>
+          <span class="icard-sub">Used/surplus acquisition · validation + optional mods · 6,000–12,000 RPM · 1.5mL tubes</span>
+        </div>
+        <div class="icard-badges">
+          <span class="badge" style="color:var(--cent)">SOURCE: W4–W6</span>
+          <span class="badge" style="color:var(--cent)">VALIDATE: W7–W8</span>
+          <span class="badge" style="color:var(--cent)">OPERATIONAL: END W8</span>
+        </div>
+      </div>
+      <div class="icard-body">
+        <div class="icard-col">
+          <div class="col-head">Sourcing Strategy</div>
+          <div class="task"><span class="task-arrow" style="color:var(--cent)">→</span>No design needed — buy used. Search: eBay "microcentrifuge", LabX, BioSurplus, ISU surplus store, Facebook Marketplace science equipment</div>
+          <div class="task"><span class="task-arrow" style="color:var(--cent)">→</span>Target brands: Labnet Spectrafuge, Benchmark MyFuge, Eppendorf MiniSpin, VWR Galaxy MiniStar</div>
+          <div class="task"><span class="task-arrow" style="color:var(--cent)">→</span>Minimum spec: accepts 1.5mL + 0.5mL Eppendorf tubes, ≥6,000 RPM. Fixed-angle rotor preferred</div>
+          <div class="task"><span class="task-arrow" style="color:var(--cent)">→</span>Budget $50–150. University surplus auctions often have these for $20–50</div>
+          <div class="deadline-line"><span class="deadline" style="color:var(--cent); border-color:var(--cent)">PURCHASE TARGET: W5</span></div>
+        </div>
+        <div class="icard-col">
+          <div class="col-head">Validation + Repair</div>
+          <div class="task"><span class="task-arrow" style="color:var(--cent)">→</span>Run with balanced water-filled tubes. Check for vibration, noise, wobble — all red flags</div>
+          <div class="task"><span class="task-arrow" style="color:var(--cent)">→</span>Test spin: colored solution, confirm pellet forms at expected RCF (6,000 × g for 1 min should pellet E. coli easily)</div>
+          <div class="task"><span class="task-arrow" style="color:var(--cent)">→</span>If brush motor is worn: replacement brushes cost $5–10, YouTube teardown available for most models</div>
+          <div class="task"><span class="task-arrow" style="color:var(--cent)">→</span>Document rotor type, max RPM, and RCF calculation. Add to Benchling as equipment record</div>
+          <div class="deadline-line"><span class="deadline" style="color:var(--cent); border-color:var(--cent)">OPERATIONAL: END W8</span></div>
+        </div>
+      </div>
+      <div class="icard-mods">
+        <div class="mods-head" style="color:var(--cent)">Modifications + Future Additions</div>
+        <div class="mods-grid">
+          <div class="mod-item" style="color:var(--cent); border-left-color:var(--cent);">
+            <div class="mod-tag" style="color:var(--cent)">Enhancement</div>
+            <div class="mod-title">RPM Tachometer Add-On</div>
+            <div class="mod-desc">Stick a reflective strip on the rotor, aim a cheap IR sensor at it, read pulses with a Pi or Arduino. Know your actual RPM instead of trusting a dial. Log every spin session.</div>
+          </div>
+          <div class="mod-item" style="color:var(--cent); border-left-color:var(--cent);">
+            <div class="mod-tag" style="color:var(--cent)">Enhancement</div>
+            <div class="mod-title">Auto-Timed Spin</div>
+            <div class="mod-desc">Relay + timer circuit: set duration, press start, relay cuts power after N seconds. No standing over it watching a clock. Simple PCB or even a mechanical timer plug.</div>
+          </div>
+          <div class="mod-item" style="color:var(--cent); border-left-color:var(--cent);">
+            <div class="mod-tag" style="color:var(--cent)">Long Term</div>
+            <div class="mod-title">Refrigerated Centrifuge (DIY)</div>
+            <div class="mod-desc">Long shot but: Peltier cooling element around the rotor cavity, temperature sensor feedback. Useful for spinning temperature-sensitive proteins. Ambitious secondary project if you're feeling spicy.</div>
+          </div>
+          <div class="mod-item" style="color:var(--cent); border-left-color:var(--cent);">
+            <div class="mod-tag" style="color:var(--cent)">Practical</div>
+            <div class="mod-title">3D-Printed Rotor Adapter</div>
+            <div class="mod-desc">Print adapters for 0.2mL PCR strip tubes, 15mL falcons, or non-standard tube formats your rotor doesn't natively support. Massively extends utility.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 03 FLUORIMETER -->
+    <div class="icard">
+      <div class="icard-head">
+        <div class="icard-title-col">
+          <span class="icard-num">INSTRUMENT 03</span>
+          <span class="icard-name" style="color:var(--fluo)">Fluorimeter PCB</span>
+          <span class="icard-sub">470nm LED driver · Si photodetector · TIA · STM32 · resin cuvette holder · Python dashboard</span>
+        </div>
+        <div class="icard-badges">
+          <span class="badge" style="color:var(--fluo)">DESIGN: W3–W6</span>
+          <span class="badge" style="color:var(--fluo)">SOURCE: W7–W8</span>
+          <span class="badge" style="color:var(--fluo)">BUILD: W8–W11</span>
+          <span class="badge" style="color:var(--fluo)">VALIDATED: END W11</span>
+        </div>
+      </div>
+      <div class="icard-body">
+        <div class="icard-col">
+          <div class="col-head">Design Tasks (KiCad)</div>
+          <div class="task"><span class="task-arrow" style="color:var(--fluo)">→</span>LED driver: constant-current circuit for 470nm LED. LM317 or AL8805 LED driver IC. Low noise — this drives your excitation source</div>
+          <div class="task"><span class="task-arrow" style="color:var(--fluo)">→</span>Photodetector: silicon photodiode (SFH2430 or similar) → transimpedance amplifier. OPA2134 or AD8627 for low noise, low bias current. Selectable feedback resistors for gain ranging</div>
+          <div class="task"><span class="task-arrow" style="color:var(--fluo)">→</span>ADC: 16-bit ADS1115 or STM32 internal 12-bit ADC. USB-serial out via STM32 CDC</div>
+          <div class="task"><span class="task-arrow" style="color:var(--fluo)">→</span>CAD: resin cuvette holder with 90° geometry (excitation from below, emission detected from side), 520nm bandpass filter slot, lightproof snap-fit lid</div>
+          <div class="task"><span class="task-arrow" style="color:var(--fluo)">→</span>PCB layout, design rule check, export Gerbers to JLCPCB ($10 for 5 boards, 1-week turnaround)</div>
+          <div class="deadline-line"><span class="deadline" style="color:var(--fluo); border-color:var(--fluo)">GERBERS TO JLCPCB: END W6</span></div>
+        </div>
+        <div class="icard-col">
+          <div class="col-head">Build + Validate</div>
+          <div class="task"><span class="task-arrow" style="color:var(--fluo)">→</span>Assemble PCB: power rails first, LED driver second, TIA last. Scope every stage with a multimeter and logic analyzer before moving on</div>
+          <div class="task"><span class="task-arrow" style="color:var(--fluo)">→</span>First light test: confirm LED driving at constant current, photodiode responding to ambient changes</div>
+          <div class="task"><span class="task-arrow" style="color:var(--fluo)">→</span>Fluorescein validation: make 6-point serial dilution in PBS, read each. Confirm linear R² > 0.99</div>
+          <div class="task"><span class="task-arrow" style="color:var(--fluo)">→</span>FAM validation: if you have FAM-BHQ oligo already, confirm you can detect FAM signal after reporter cleavage simulation (just free FAM dye)</div>
+          <div class="task"><span class="task-arrow" style="color:var(--fluo)">→</span>Python dashboard: real-time plot, calibration curve fit, CSV export, concentration readout from standard curve</div>
+          <div class="deadline-line"><span class="deadline" style="color:var(--fluo); border-color:var(--fluo)">LINEAR CALIBRATION CURVE: END W11</span></div>
+        </div>
+      </div>
+      <div class="icard-mods">
+        <div class="mods-head" style="color:var(--fluo)">Modifications + Future Additions</div>
+        <div class="mods-grid">
+          <div class="mod-item" style="color:var(--fluo); border-left-color:var(--fluo);">
+            <div class="mod-tag" style="color:var(--fluo)">⭐ High Value</div>
+            <div class="mod-title">Multi-Channel / Multi-Wavelength</div>
+            <div class="mod-desc">Add a second LED (e.g. 530nm for SYBR Green, or 590nm for Texas Red) with a filter wheel or flip-mount. Now you can read multiple fluorophores without swapping hardware. Critical for multiplex CRISPR assays.</div>
+          </div>
+          <div class="mod-item" style="color:var(--fluo); border-left-color:var(--fluo);">
+            <div class="mod-tag" style="color:var(--fluo)">⭐ High Value</div>
+            <div class="mod-title">Kinetic Mode</div>
+            <div class="mod-desc">Read fluorescence continuously over time at 37°C (add a small Peltier heater to the cuvette holder). Now you can watch Cas12a trans-cleavage happen in real time — a proper kinetic fluorescence assay. This is how the capstone biology actually runs.</div>
+          </div>
+          <div class="mod-item" style="color:var(--fluo); border-left-color:var(--fluo);">
+            <div class="mod-tag" style="color:var(--fluo)">Enhancement</div>
+            <div class="mod-title">Plate Reader Mode</div>
+            <div class="mod-desc">Design a 96-well or 8-strip adapter that positions each well over the detector in sequence via a stepper-driven XY stage. Suddenly you have a basic plate reader for ~$50 more in parts.</div>
+          </div>
+          <div class="mod-item" style="color:var(--fluo); border-left-color:var(--fluo);">
+            <div class="mod-tag" style="color:var(--fluo)">Enhancement</div>
+            <div class="mod-title">Lock-in Amplifier Firmware</div>
+            <div class="mod-desc">Modulate the LED at a known frequency, use STM32 to demodulate the photodetector signal at that frequency only. Dramatically improves SNR — filters out ambient light and 1/f noise without any additional hardware.</div>
+          </div>
+          <div class="mod-item" style="color:var(--fluo); border-left-color:var(--fluo);">
+            <div class="mod-tag" style="color:var(--fluo)">Addition</div>
+            <div class="mod-title">Absorbance Mode (Spectrophotometer)</div>
+            <div class="mod-desc">Place LED and detector in-line instead of 90°. Now you can read OD600 for bacterial culture density — useful for E. coli growth curves in your home BSL-1 work.</div>
+          </div>
+          <div class="mod-item" style="color:var(--fluo); border-left-color:var(--fluo);">
+            <div class="mod-tag" style="color:var(--fluo)">Long Term</div>
+            <div class="mod-title">Chip-Integrated Optics</div>
+            <div class="mod-desc">Move the LED and photodetector into the microfluidic chip carrier itself, so the chip slots in and optical alignment is automatic. Eliminates manual alignment every run — key for the capstone integration.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 04 POTENTIOSTAT -->
+    <div class="icard">
+      <div class="icard-head">
+        <div class="icard-title-col">
+          <span class="icard-num">INSTRUMENT 04</span>
+          <span class="icard-name" style="color:var(--pot)">Potentiostat PCB</span>
+          <span class="icard-sub">Voltage DAC · TIA current sense · STM32 · CV/DPV waveforms · 3-electrode connector · Python CV plotter</span>
+        </div>
+        <div class="icard-badges">
+          <span class="badge" style="color:var(--pot)">DESIGN: W5–W8</span>
+          <span class="badge" style="color:var(--pot)">SOURCE: W9–W10</span>
+          <span class="badge" style="color:var(--pot)">BUILD: W10–W13</span>
+          <span class="badge" style="color:var(--pot)">VALIDATED CV: END W13</span>
+        </div>
+      </div>
+      <div class="icard-body">
+        <div class="icard-col">
+          <div class="col-head">Design Tasks (KiCad)</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pot)">→</span>Study CheapStat and Rodeostat open-source designs first — understand the control loop before designing your own variation</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pot)">→</span>DAC (MCP4922 or DAC8552) sets working electrode potential via a voltage follower op-amp. ±2V range covers most biosensor work</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pot)">→</span>TIA on counter electrode measures current response. Same low-noise op-amp philosophy as fluorimeter TIA — share component library</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pot)">→</span>STM32 generates CV/DPV/EIS waveforms, streams voltage+current pairs over USB-serial at 1kHz sample rate</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pot)">→</span>3-electrode header: working, reference (Ag/AgCl), counter. Design for standard screen-printed gold electrode chips (SPE)</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pot)">→</span>Dual-supply rail (±5V from USB via charge pump or external wall wart). Shield layout carefully — this is an analog instrument</div>
+          <div class="deadline-line"><span class="deadline" style="color:var(--pot); border-color:var(--pot)">GERBERS TO JLCPCB: END W8</span></div>
+        </div>
+        <div class="icard-col">
+          <div class="col-head">Build + Validate</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pot)">→</span>Bring up with a known resistor load first — confirm DAC output and current measurement agree with Ohm's law before any electrochemistry</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pot)">→</span>First CV: ferri/ferrocyanide (5mM K₃[Fe(CN)₆] in 0.1M KCl). Textbook reversible redox couple — clean duck-bill CV shape confirms instrument works</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pot)">→</span>Characterize: scan rate dependence of peak current (Randles-Ševčík), confirm linear relationship. This is your validation data</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pot)">→</span>Python: CV plotter, DPV plotter, peak detection, data export. Clean UI — this is a Marc Lab product</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pot)">→</span>Document fully with validation plots in Benchling and GitHub README</div>
+          <div class="deadline-line"><span class="deadline" style="color:var(--pot); border-color:var(--pot)">VALIDATED WITH FERRI/FERROCYANIDE: END W13</span></div>
+        </div>
+      </div>
+      <div class="icard-mods">
+        <div class="mods-head" style="color:var(--pot)">Modifications + Future Additions</div>
+        <div class="mods-grid">
+          <div class="mod-item" style="color:var(--pot); border-left-color:var(--pot);">
+            <div class="mod-tag" style="color:var(--pot)">⭐ Capstone Link</div>
+            <div class="mod-title">Electrochemical CRISPR Readout</div>
+            <div class="mod-desc">Functionalize a gold electrode with the FAM-BHQ ssDNA reporter. When Cas12a cleaves it, the electrode surface chemistry changes measurably. Secondary readout for the capstone that doesn't rely on optics — redundant validation is scientifically stronger.</div>
+          </div>
+          <div class="mod-item" style="color:var(--pot); border-left-color:var(--pot);">
+            <div class="mod-tag" style="color:var(--pot)">Enhancement</div>
+            <div class="mod-title">EIS Mode (Impedance Spectroscopy)</div>
+            <div class="mod-desc">Add a sine wave generator and lock-in detection in firmware. Electrochemical impedance spectroscopy unlocks biosensor surface characterization — confirm antibody or aptamer binding on electrode surface without optical labels.</div>
+          </div>
+          <div class="mod-item" style="color:var(--pot); border-left-color:var(--pot);">
+            <div class="mod-tag" style="color:var(--pot)">Enhancement</div>
+            <div class="mod-title">Multiplex Electrode Array</div>
+            <div class="mod-desc">Design a multiplexer (CD4051 or similar) in front of the TIA to switch between 4–8 electrodes sequentially. Now you can run a cytokine panel on a single chip — one potentiostat, multiple analytes.</div>
+          </div>
+          <div class="mod-item" style="color:var(--pot); border-left-color:var(--pot);">
+            <div class="mod-tag" style="color:var(--pot)">Addition</div>
+            <div class="mod-title">PCB Electrode Fabrication</div>
+            <div class="mod-desc">Instead of buying screen-printed electrodes, design your own gold or carbon electrode patterns directly in KiCad and have JLCPCB fab them. Dramatically reduces per-experiment cost from ~$3 to cents per chip.</div>
+          </div>
+          <div class="mod-item" style="color:var(--pot); border-left-color:var(--pot);">
+            <div class="mod-tag" style="color:var(--pot)">Long Term</div>
+            <div class="mod-title">Wearable Patch Version</div>
+            <div class="mod-desc">Miniaturize to flexible PCB format with BLE output. Skin-conformal electrode array, sweat or ISF sampling. Now it's a wearable biosensor platform — entirely different product direction if you want to go there.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 05 qPCR -->
+    <div class="icard">
+      <div class="icard-head">
+        <div class="icard-title-col">
+          <span class="icard-num">INSTRUMENT 05</span>
+          <span class="icard-name" style="color:var(--pcr)">qPCR Thermocycler</span>
+          <span class="icard-sub">Peltier thermal block · PID firmware · FAM detection channel · STM32 · 8-tube strip format</span>
+        </div>
+        <div class="icard-badges">
+          <span class="badge" style="color:var(--pcr)">DESIGN: W6–W10</span>
+          <span class="badge" style="color:var(--pcr)">SOURCE: W11–W12</span>
+          <span class="badge" style="color:var(--pcr)">BUILD: W13 → EARLY FALL</span>
+          <span class="badge" style="color:var(--pcr)">FIRST PCR: EARLY FALL</span>
+        </div>
+      </div>
+      <div class="icard-body">
+        <div class="icard-col">
+          <div class="col-head">Design Tasks (KiCad + CAD)</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pcr)">→</span>This is the most complex build. Allocate 5 weeks of design time — it's earned</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pcr)">→</span>Peltier driver: H-bridge (DRV8701 or discrete MOSFETs), current-limited, bidirectional — allows heating AND cooling. This is what enables fast ramp rates</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pcr)">→</span>Thermal block: aluminum block with 8-tube strip cavity machined or sourced, NTC thermistor embedded, Peltier sandwich, heatsink on cold side with small fan</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pcr)">→</span>STM32 PID: dual-loop (heating/cooling), ramp rate target, overshoot compensation. Tune for ±0.5°C steady-state</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pcr)">→</span>FAM channel: reuse fluorimeter TIA design, LED fires from below each cycle during extension — share component library</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pcr)">→</span>Heated lid: resistive heater + second thermistor, prevents condensation, holds at 105°C during cycling</div>
+          <div class="deadline-line"><span class="deadline" style="color:var(--pcr); border-color:var(--pcr)">GERBERS: END W10 · COMPONENTS ORDERED: W12</span></div>
+        </div>
+        <div class="icard-col">
+          <div class="col-head">Build + Validate (W13 → Fall)</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pcr)">→</span>Bring up power stage first — Peltier driver is the highest risk. Confirm H-bridge switching before attaching Peltier</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pcr)">→</span>PID tuning: log temperature vs time at multiple setpoints. Tune Kp/Ki/Kd until ramp rates hit 2–3°C/s and overshoot is <1°C</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pcr)">→</span>First PCR: lambda DNA + universal primers, 30 cycles, standard protocol. Run product on your gel rig — band at expected size = success</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pcr)">→</span>qPCR validation: SYBR Green + dilution series. Confirm Ct values shift by ~3.3 per 10× dilution (expected for PCR efficiency ~100%)</div>
+          <div class="task"><span class="task-arrow" style="color:var(--pcr)">→</span>Python: cycle program editor, real-time temp + fluorescence plot, Ct calling algorithm, efficiency curve</div>
+          <div class="deadline-line"><span class="deadline" style="color:var(--pcr); border-color:var(--pcr)">FIRST SUCCESSFUL PCR: EARLY FALL SEMESTER</span></div>
+        </div>
+      </div>
+      <div class="icard-mods">
+        <div class="mods-head" style="color:var(--pcr)">Modifications + Future Additions</div>
+        <div class="mods-grid">
+          <div class="mod-item" style="color:var(--pcr); border-left-color:var(--pcr);">
+            <div class="mod-tag" style="color:var(--pcr)">⭐ Capstone Link</div>
+            <div class="mod-title">Isothermal Amplification Mode</div>
+            <div class="mod-desc">Add a single-temperature hold mode (37°C or 42°C) for LAMP or RPA upstream of Cas12a detection. Amplify target DNA isothermally, then feed directly into CRISPR assay. Dramatically lowers limit of detection for the capstone system.</div>
+          </div>
+          <div class="mod-item" style="color:var(--pcr); border-left-color:var(--pcr);">
+            <div class="mod-tag" style="color:var(--pcr)">⭐ High Value</div>
+            <div class="mod-title">Multiplex Fluorescence (HEX + FAM)</div>
+            <div class="mod-desc">Add a second LED (530nm) + second photodetector channel with HEX filter. Now run multiplexed qPCR — target + internal control in the same tube. More scientifically rigorous, more publishable.</div>
+          </div>
+          <div class="mod-item" style="color:var(--pcr); border-left-color:var(--pcr);">
+            <div class="mod-tag" style="color:var(--pcr)">Enhancement</div>
+            <div class="mod-title">Gradient Block</div>
+            <div class="mod-desc">Machine the aluminum block with a slight thermal gradient across the 8 tubes using two independent Peltiers. Run annealing temperature optimization in a single reaction — the classic gradient PCR trick, built into your instrument.</div>
+          </div>
+          <div class="mod-item" style="color:var(--pcr); border-left-color:var(--pcr);">
+            <div class="mod-tag" style="color:var(--pcr)">Enhancement</div>
+            <div class="mod-title">AAV Titer Mode</div>
+            <div class="mod-desc">Implement a dedicated protocol template for AAV genome titer: ITR-targeting primers, absolute quantification from standard curve, formatted QC report output. Turns this into a gene therapy QC instrument — exactly what project 9 from the original list envisioned.</div>
+          </div>
+          <div class="mod-item" style="color:var(--pcr); border-left-color:var(--pcr);">
+            <div class="mod-tag" style="color:var(--pcr)">Addition</div>
+            <div class="mod-title">Digital PCR Module</div>
+            <div class="mod-desc">Long shot: design a microfluidic chip that partitions sample into thousands of nanoliter droplets, run PCR on chip, count positive droplets with the fluorescence channel. That's DIY ddPCR — currently no open-source instrument exists at any price.</div>
+          </div>
+          <div class="mod-item" style="color:var(--pcr); border-left-color:var(--pcr);">
+            <div class="mod-tag" style="color:var(--pcr)">Long Term</div>
+            <div class="mod-title">96-Well Upgrade</div>
+            <div class="mod-desc">Design a larger thermal block for standard 96-well plates. Requires a bigger Peltier array and more thermal mass, but the PCB and firmware architecture scales directly. Turns Marc Lab into a real high-throughput qPCR platform.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 06 MICROFLUIDIC CHIP -->
+    <div class="icard">
+      <div class="icard-head">
+        <div class="icard-title-col">
+          <span class="icard-num">INSTRUMENT 06</span>
+          <span class="icard-name" style="color:var(--chip)">Microfluidic Chip Platform</span>
+          <span class="icard-sub">Resin-printed reaction chamber · optical window · biocompatibility characterization · snap-fit carrier</span>
+        </div>
+        <div class="icard-badges">
+          <span class="badge" style="color:var(--chip)">DESIGN: W9–W13</span>
+          <span class="badge" style="color:var(--chip)">PRINT + TEST: W14 → FALL</span>
+          <span class="badge" style="color:var(--chip)">BIO-COMPATIBLE V1: EARLY FALL</span>
+        </div>
+      </div>
+      <div class="icard-body">
+        <div class="icard-col">
+          <div class="col-head">Design Tasks</div>
+          <div class="task"><span class="task-arrow" style="color:var(--chip)">→</span>Literature first: read 3–5 papers on resin-printed microfluidics. Know your printer's channel resolution limits before designing anything</div>
+          <div class="task"><span class="task-arrow" style="color:var(--chip)">→</span>V1 geometry: simple. One inlet, one reaction chamber (50–200µL volume), one optical window zone, one vent. No active mixing — passive diffusion only</div>
+          <div class="task"><span class="task-arrow" style="color:var(--chip)">→</span>Optical window: thin resin membrane or open-top design that aligns precisely with fluorimeter beam path</div>
+          <div class="task"><span class="task-arrow" style="color:var(--chip)">→</span>Chip carrier: snap-fit resin enclosure that holds chip, aligns to fluorimeter, and maintains lightproofing. Design so chips are swappable in 5 seconds</div>
+          <div class="task"><span class="task-arrow" style="color:var(--chip)">→</span>Biocompatibility protocol: wash in IPA, cure under UV, soak in PBS for 24h, read fluorescence of soak buffer on fluorimeter. Leaching = signal above baseline. Iterate until clean</div>
+          <div class="deadline-line"><span class="deadline" style="color:var(--chip); border-color:var(--chip)">DESIGN V1 COMPLETE: END W13</span></div>
+        </div>
+        <div class="icard-col">
+          <div class="col-head">Print + Test (W14 → Fall)</div>
+          <div class="task"><span class="task-arrow" style="color:var(--chip)">→</span>Print V1. Wash 3× IPA, cure 60min UV. Measure channel dimensions with calipers or macro lens photo</div>
+          <div class="task"><span class="task-arrow" style="color:var(--chip)">→</span>Leak test: fill with water + food coloring, apply pressure with syringe. Note any leaks or delamination</div>
+          <div class="task"><span class="task-arrow" style="color:var(--chip)">→</span>Biocompatibility: soak buffer absorbance/fluorescence over 2h at 37°C. If signal elevated, extend wash protocol or switch resin</div>
+          <div class="task"><span class="task-arrow" style="color:var(--chip)">→</span>Flow characterization: syringe pump (or gravity flow), measure dead volume, fill time, mixing uniformity with colored dye</div>
+          <div class="task"><span class="task-arrow" style="color:var(--chip)">→</span>Expect 2–3 print iterations. That's normal. Document every version with photos and test data in Benchling</div>
+          <div class="deadline-line"><span class="deadline" style="color:var(--chip); border-color:var(--chip)">BIOCOMPATIBLE + LEAK-FREE V: EARLY FALL</span></div>
+        </div>
+      </div>
+      <div class="icard-mods">
+        <div class="mods-head" style="color:var(--chip)">Modifications + Future Additions</div>
+        <div class="mods-grid">
+          <div class="mod-item" style="color:var(--chip); border-left-color:var(--chip);">
+            <div class="mod-tag" style="color:var(--chip)">⭐ Capstone Core</div>
+            <div class="mod-title">Integrated Heating for Incubation</div>
+            <div class="mod-desc">Embed a resistive heater trace in the chip carrier PCB, thermistor feedback, hold at 37°C during Cas12a incubation. No external heat block needed — the chip carrier is also the incubator.</div>
+          </div>
+          <div class="mod-item" style="color:var(--chip); border-left-color:var(--chip);">
+            <div class="mod-tag" style="color:var(--chip)">Enhancement</div>
+            <div class="mod-title">Herringbone Micromixer</div>
+            <div class="mod-desc">V2 chip geometry: add herringbone ridges in the channel ceiling to passively mix laminar flow. Critical if you ever want to run two-component mixing on-chip (e.g. Cas12a + sample). Resin printing can achieve this at ~100µm feature sizes.</div>
+          </div>
+          <div class="mod-item" style="color:var(--chip); border-left-color:var(--chip);">
+            <div class="mod-tag" style="color:var(--chip)">Enhancement</div>
+            <div class="mod-title">Droplet Generation</div>
+            <div class="mod-desc">T-junction or flow-focusing geometry for water-in-oil droplet formation. Each droplet is an individual reaction. That's the foundation of digital PCR and droplet CRISPR assays. A V3 chip geometry, but the printer can do it.</div>
+          </div>
+          <div class="mod-item" style="color:var(--chip); border-left-color:var(--chip);">
+            <div class="mod-tag" style="color:var(--chip)">Enhancement</div>
+            <div class="mod-title">Surface Functionalization</div>
+            <div class="mod-desc">Coat channel walls with PDMS-compatible silane chemistry or protein-blocking agent (BSA, PEG-silane) to reduce non-specific adsorption of Cas12a or reporter. This is real biomaterials surface science — publishable characterization data.</div>
+          </div>
+          <div class="mod-item" style="color:var(--chip); border-left-color:var(--chip);">
+            <div class="mod-tag" style="color:var(--chip)">Addition</div>
+            <div class="mod-title">LNP Formation Chip</div>
+            <div class="mod-desc">Design a herringbone staggered mixer for lipid + aqueous stream mixing — the LNP microfluidic former from the original project list. Same chip platform, different geometry. Marc Lab ships two chip variants from one resin printer.</div>
+          </div>
+          <div class="mod-item" style="color:var(--chip); border-left-color:var(--chip);">
+            <div class="mod-tag" style="color:var(--chip)">Long Term</div>
+            <div class="mod-title">Valve Integration</div>
+            <div class="mod-desc">Pneumatic or Braille-pin valves for active flow control — compartmentalize assay steps on-chip (sample prep → amplification → detection). True lab-on-chip. Ambitious but within reach of resin printing at this feature scale.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- CAPSTONE -->
+  <div class="sec-title" data-n="03">The Capstone</div>
+  <div class="capstone-block">
+    <div class="cap-title">AI-DIRECTED OPEN-SOURCE<br>CRISPR OPTIMIZATION PLATFORM</div>
+    <div class="cap-sub">An autonomous experimental loop running entirely on Marc Lab hardware. The fluorimeter reads Cas12a trans-cleavage assays in real time. A Python/Claude agent analyzes each result and proposes the next crRNA variant or condition via Bayesian optimization. The loop runs, learns, and converges — on instruments you designed, on a home bench, for under $600 total. Nothing like this exists at this accessibility level.</div>
+
+    <div class="cap-pillars">
+      <div class="cap-pillar"><div class="cp-name">Fluorimeter</div><div class="cp-desc">Primary readout. Kinetic FAM signal during Cas12a trans-cleavage incubation at 37°C</div></div>
+      <div class="cap-pillar"><div class="cp-name">Thermocycler</div><div class="cp-desc">Upstream sample prep + isothermal amplification (LAMP/RPA) to boost target copy number</div></div>
+      <div class="cap-pillar"><div class="cp-name">Potentiostat</div><div class="cp-desc">Secondary electrochemical readout. Redundant validation of detection signal</div></div>
+      <div class="cap-pillar"><div class="cp-name">Microfluidic Chip</div><div class="cp-desc">Reaction vessel for chip-format assay. Integrated heater in carrier for incubation</div></div>
+      <div class="cap-pillar"><div class="cp-name">Agent Loop</div><div class="cp-desc">Claude/Hermes Bayesian optimizer proposes next experiment. Logs all runs. Built on OpenClaw infrastructure</div></div>
+      <div class="cap-pillar"><div class="cp-name">Sequencing</div><div class="cp-desc">Plasmidsaurus confirms top crRNA candidates externally. Keeps biology honest without ISU access</div></div>
+    </div>
+
+    <div class="cap-timeline">
+      <div class="ct-seg"><div class="ct-label">Summer — Now</div><div class="ct-desc">Order crRNA + FAM-BHQ reporter from IDT. Read Cas12a lit. Begin agent architecture design in parallel with builds</div></div>
+      <div class="ct-seg"><div class="ct-label">Fall — Sep/Oct</div><div class="ct-desc">Cas12a tube-format assay validated on Marc Lab fluorimeter. Agent loop v1 running. Chip integration begins</div></div>
+      <div class="ct-seg"><div class="ct-label">Fall — Nov/Dec</div><div class="ct-desc">Bayesian loop running live. First crRNA optimization campaign. Preliminary data for mid-year review</div></div>
+      <div class="ct-seg"><div class="ct-label">Spring — Jan/Mar</div><div class="ct-desc">Full system integration. LOD + reproducibility characterized. Chip-format assay validated</div></div>
+      <div class="ct-seg"><div class="ct-label">Spring — Apr/May</div><div class="ct-desc">GitHub open-source release. Capstone demo. Manuscript draft. LinkedIn. Talk to Daniel Cohen.</div></div>
+    </div>
+  </div>
+
+  <!-- BUDGET -->
+  <div class="sec-title" data-n="04">Budget — Full Year</div>
+  <table class="budget-table">
+    <thead>
+      <tr><th>Item</th><th>Instrument</th><th>When</th><th class="right">Est. Cost</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><div class="col-dot-cell"><div class="leg-dot" style="background:var(--gel)"></div>Agarose, SYBR Safe, TAE, ladder, dye</div></td><td>Gel+Imaging</td><td>W3</td><td class="right" style="color:var(--gel)">$40–70</td></tr>
+      <tr><td><div class="col-dot-cell"><div class="leg-dot" style="background:var(--gel)"></div>Blue LED transilluminator + amber filter</div></td><td>Gel+Imaging</td><td>W3</td><td class="right" style="color:var(--gel)">$30–55</td></tr>
+      <tr><td><div class="col-dot-cell"><div class="leg-dot" style="background:var(--gel)"></div>Pi camera module + bench PSU (used)</div></td><td>Gel+Imaging</td><td>W3–4</td><td class="right" style="color:var(--gel)">$50–90</td></tr>
+      <tr><td><div class="col-dot-cell"><div class="leg-dot" style="background:var(--cent)"></div>Microcentrifuge (used — eBay/surplus)</div></td><td>Centrifuge</td><td>W4–6</td><td class="right" style="color:var(--cent)">$50–150</td></tr>
+      <tr><td><div class="col-dot-cell"><div class="leg-dot" style="background:var(--fluo)"></div>Fluorimeter PCB fab (JLCPCB ×5)</div></td><td>Fluorimeter</td><td>W6</td><td class="right" style="color:var(--fluo)">$10–15</td></tr>
+      <tr><td><div class="col-dot-cell"><div class="leg-dot" style="background:var(--fluo)"></div>Fluorimeter components (LED, photodiode, op-amp, STM32)</div></td><td>Fluorimeter</td><td>W6–7</td><td class="right" style="color:var(--fluo)">$45–85</td></tr>
+      <tr><td><div class="col-dot-cell"><div class="leg-dot" style="background:var(--pot)"></div>Potentiostat PCB fab + all components</div></td><td>Potentiostat</td><td>W8–9</td><td class="right" style="color:var(--pot)">$55–110</td></tr>
+      <tr><td><div class="col-dot-cell"><div class="leg-dot" style="background:var(--pcr)"></div>Thermocycler PCB fab + components</div></td><td>qPCR</td><td>W10–12</td><td class="right" style="color:var(--pcr)">$120–200</td></tr>
+      <tr><td><div class="col-dot-cell"><div class="leg-dot" style="background:var(--pcr)"></div>Peltier module + heatsink + thermal block</div></td><td>qPCR</td><td>W12</td><td class="right" style="color:var(--pcr)">$40–80</td></tr>
+      <tr><td><div class="col-dot-cell"><div class="leg-dot" style="background:var(--chip)"></div>Resin + consumables for chip iterations (×3 likely)</div></td><td>Chip</td><td>W14+</td><td class="right" style="color:var(--chip)">$40–80</td></tr>
+      <tr><td><div class="col-dot-cell"><div class="leg-dot" style="background:#888"></div>Pipettes P20/P200/P1000 (used or new)</div></td><td>Essentials</td><td>W1–2</td><td class="right">$60–120</td></tr>
+      <tr><td><div class="col-dot-cell"><div class="leg-dot" style="background:#888"></div>Tips, tubes (0.5/1.5/2mL), gloves, lab notebook</div></td><td>Essentials</td><td>Ongoing</td><td class="right">$50–90</td></tr>
+      <tr><td><div class="col-dot-cell"><div class="leg-dot" style="background:#888"></div>Oscilloscope DS1054Z (optional but recommended)</div></td><td>Bench</td><td>When budget allows</td><td class="right">$0–350</td></tr>
+      <tr><td><div class="col-dot-cell"><div class="leg-dot" style="background:#aaa; opacity:0.6"></div>crRNA + FAM-BHQ ssDNA reporter (IDT)</div></td><td>Capstone</td><td>Aug/Sep</td><td class="right" style="color:var(--muted)">$40–80</td></tr>
+      <tr><td><div class="col-dot-cell"><div class="leg-dot" style="background:#aaa; opacity:0.6"></div>Cas12a protein (NEB EnGen Lba Cas12a)</div></td><td>Capstone</td><td>Sep</td><td class="right" style="color:var(--muted)">$100–180</td></tr>
+      <tr><td><div class="col-dot-cell"><div class="leg-dot" style="background:#aaa; opacity:0.6"></div>Plasmidsaurus sequencing (~$7/sample ×10–15)</div></td><td>Capstone</td><td>Fall/Spring</td><td class="right" style="color:var(--muted)">$70–110</td></tr>
+      <tr class="total"><td colspan="3"><strong>TOTAL ESTIMATED RANGE</strong></td><td class="right"><strong>$800–$1,865</strong></td></tr>
+    </tbody>
+  </table>
+
+  <!-- TONIGHT -->
+  <div class="sec-title" data-n="05">Start Tonight</div>
+  <div class="tonight">
+    <div class="tonight-title">// Week 1, Day 1 — Right Now</div>
+    <div class="tonight-grid">
+      <div class="tg-block">
+        <div class="tg-head">ACCOUNTS + SETUP (1 hr)</div>
+        <div class="tg-item">GitHub: create repo <strong>marc-lab</strong>. Add README with one-line project description</div>
+        <div class="tg-item">Benchling free account: create project "Marc Lab Instrument Suite"</div>
+        <div class="tg-item">IDT account (free) — bookmark for oligo orders in August</div>
+        <div class="tg-item">Plasmidsaurus account — bookmark for fall sequencing</div>
+        <div class="tg-item">JLCPCB, Mouser, DigiKey bookmarked in a "Marc Lab" browser folder</div>
+      </div>
+      <div class="tg-block">
+        <div class="tg-head">DESIGN WORK (2–3 hrs)</div>
+        <div class="tg-item">Open CAD — start gel box body. Unified enclosure: 10×7cm gel cavity, integrated hood above, hinged lid. Simple geometry, good first print</div>
+        <div class="tg-item">Sketch the combined unit on paper first — how does the camera sit above the LED tray? Where does the hinge go? Think before modeling</div>
+        <div class="tg-item">Model gel comb parametrically — tooth width and spacing as variables so you can regenerate for any format</div>
+        <div class="tg-item">First GitHub commit: push whatever CAD files exist tonight. It's real when it's on GitHub</div>
+      </div>
+    </div>
+    <div class="note" style="margin-top:16px;">
+      <strong>The rule</strong>
+      Design first, source second, build third. Every time. No buying parts before you know exactly what you're building. That discipline is what makes Marc Lab instruments instead of a pile of components.
+    </div>
+  </div>
+
+  <footer>
+    <span class="ft">MARC LAB // <span>BENNETT</span> // ISU BME 2027</span>
+    <span class="ft">BUILD PLAN <span>v2.0</span> // MAY 16, 2026</span>
+  </footer>
+
+</div>
+</body>
+</html>
