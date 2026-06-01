@@ -201,7 +201,7 @@ static void draw_welcome(Canvas* c, AppModel* m) {
         canvas_draw_box(c, 14, 10, 100, 12);
         canvas_set_color(c, ColorWhite);
     }
-    canvas_draw_str_aligned(c, 64, 21, AlignCenter, AlignBottom, "SONY IR SEARCH");
+    canvas_draw_str_aligned(c, 64, 21, AlignCenter, AlignBottom, "SONY IR FINDER");
     canvas_set_color(c, ColorBlack);
 
     /* Dynamic subtitle showing current address selection */
