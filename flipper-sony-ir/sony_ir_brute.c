@@ -1,6 +1,7 @@
-/* Sony IR Finder v5 — dual mode: Binary Search or Auto-Scan
- * Protocol: SIRC-12, 40kHz handled by SDK
- * Timing:   3 frames × 25ms gap (Sony spec: ~45ms repeat period)
+/* Sony IR Finder v6 — dual mode: Binary Search or Auto-Scan
+ * Protocol: SIRC-12, 40kHz carrier managed by SDK
+ * TX:       infrared_send(msg, min_repeat_count) — SDK manages inter-frame timing
+ *           (3 frames × 45ms period = ~135ms per code; matches built-in IR app behaviour)
  * Addresses: addr=1 system, addr=17 CD transport (confirmed CMT-NE3)
  */
 
@@ -21,9 +22,8 @@
 #define CMD_MIN        0
 #define CMD_MAX        127
 #define NUM_FUNCS      12
-#define SEND_REPS      3
-#define INTER_FRAME_MS 25    /* after each frame; ~20ms frame + 25ms = 45ms period */
-#define INTER_CMD_MS   55
+/* infrared_signal_transmit() sends min_repeat_count frames (~105ms total for SIRC-3x45ms) */
+#define INTER_CMD_MS   40    /* gap between different commands after transmission completes */
 #define OUTPUT_PATH    "/ext/infrared/Sony_CMT_NE3_confirmed.ir"
 #define RECORD_STORAGE "storage"
 #define ANIM_MS        60
@@ -361,11 +361,16 @@ static void draw_cb(Canvas* c, void* model) {
 
 /* ── IR thread ──────────────────────────────────────────────────── */
 static void send_code_reps(App* app, uint8_t addr, uint8_t cmd) {
-    InfraredMessage msg={.protocol=InfraredProtocolSIRC,.address=addr,.command=cmd,.repeat=false};
-    for(int r=0;r<SEND_REPS&&!app->abort;r++){
-        infrared_send(&msg,1);
-        furi_delay_ms(INTER_FRAME_MS);
-    }
+    if(app->abort) return;
+    InfraredMessage msg = {
+        .protocol = InfraredProtocolSIRC,
+        .address  = addr,
+        .command  = cmd,
+        .repeat   = false,
+    };
+    /* Let SDK send min_repeat_count (3) frames with correct SIRC 45ms inter-frame period.
+     * infrared_send blocks until all frames are transmitted (~135ms total). */
+    infrared_send(&msg, (int)infrared_get_protocol_min_repeat_count(InfraredProtocolSIRC));
 }
 
 static int32_t ir_thread_fn(void* ctx) {
@@ -408,7 +413,7 @@ static int32_t ir_thread_fn(void* ctx) {
 static void start_ir_thread(App* app, uint8_t fi, uint8_t tlo, uint8_t thi, ThreadMode mode) {
     app->abort=false; app->tfi=fi; app->tlo=tlo; app->thi=thi; app->thread_mode=mode;
     if(app->ir_thread){ furi_thread_free(app->ir_thread); app->ir_thread=NULL; }
-    app->ir_thread=furi_thread_alloc_ex("ir_send",1024,ir_thread_fn,app);
+    app->ir_thread=furi_thread_alloc_ex("ir_send",4096,ir_thread_fn,app);
     furi_thread_start(app->ir_thread);
     app->thread_running=true;
 }
