@@ -3,7 +3,7 @@ App(
     name="Sony IR Finder",
     apptype=FlipperAppType.EXTERNAL,
     entry_point="sony_ir_search_app",
-    requires=["gui", "storage"],
+    requires=["gui", "storage", "notification"],
     stack_size=8 * 1024,
     fap_category="Tools",
     fap_version=(2, 0),

@@ -19,6 +19,8 @@
 #include <storage/storage.h>
 #include <lib/infrared/worker/infrared_transmit.h>
 #include <lib/infrared/encoder_decoder/infrared.h>
+#include <notification/notification.h>
+#include <notification/notification_messages.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -94,10 +96,11 @@ typedef struct {
 /* ══════════════════════════════════════════════════════════════════ */
 
 typedef struct {
-    ViewDispatcher* vd;
-    View*           view;
-    Gui*            gui;
-    FuriThread*     ir_thread;
+    ViewDispatcher*  vd;
+    View*            view;
+    Gui*             gui;
+    NotificationApp* notif;
+    FuriThread*      ir_thread;
 
     /* set by main before thread start; read by thread             */
     uint8_t  tlo, thi, taddr;
@@ -782,9 +785,11 @@ static bool custom_event_cb(void* ctx, uint32_t ev) {
 
         } else if(m->lo == m->hi) {
             m->state = AppStateSingle;
+            notification_message(app->notif, &sequence_single_vibro);
 
         } else {
             m->state = AppStateAsking;
+            notification_message(app->notif, &sequence_single_vibro);
         }
 
         if(m->state == AppStateDone) {
@@ -860,7 +865,8 @@ int32_t sony_ir_search_app(void* p) {
     view_dispatcher_add_view(app->vd, APP_VIEW, app->view);
     view_dispatcher_switch_to_view(app->vd, APP_VIEW);
 
-    app->gui = (Gui*)furi_record_open(RECORD_GUI);
+    app->gui   = (Gui*)furi_record_open(RECORD_GUI);
+    app->notif = (NotificationApp*)furi_record_open(RECORD_NOTIFICATION);
     view_dispatcher_attach_to_gui(app->vd, app->gui, ViewDispatcherTypeFullscreen);
 
     view_dispatcher_run(app->vd);
@@ -871,6 +877,7 @@ int32_t sony_ir_search_app(void* p) {
     view_dispatcher_free(app->vd);
     view_free_model(app->view);
     view_free(app->view);
+    furi_record_close(RECORD_NOTIFICATION);
     furi_record_close(RECORD_GUI);
     free(app);
     return 0;
