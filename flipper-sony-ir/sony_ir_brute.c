@@ -1,8 +1,9 @@
-/* Sony IR Search v3 — binary-searches SIRC cmd space for Sony CMT-NE3
- * Protocol: SIRC 12-bit, address = 1, command range 0-127
+/* Sony IR Search v3.1 — binary-searches SIRC cmd space for Sony CMT-NE3
+ * Protocol: SIRC 12-bit (7-bit cmd + 5-bit addr), carrier 40kHz handled by SDK
+ * Common Sony audio addresses: 0=audio/general, 1=TV/audio, 17=CD, 18=Tuner/Deck
  *
  * Controls (context-sensitive, shown on every screen):
- *   Welcome  : [OK] start  [<] exit
+ *   Welcome  : [OK] start  [^][v] addr  [<] exit
  *   Sending  : [<] skip function
  *   Asking   : [^] yes  [v] no  [>] resend batch  [<] skip
  *   Single   : [OK] yes  [v] no  [>] resend code   [<] skip
@@ -25,16 +26,21 @@
 /*  Constants                                                        */
 /* ══════════════════════════════════════════════════════════════════ */
 
-#define SIRC_ADDR       1
-#define CMD_MIN         0
-#define CMD_MAX         127
-#define NUM_FUNCS       12
-#define SEND_REPS       3       /* IR repetitions per command code   */
-#define INTER_CMD_MS    55      /* pause between successive codes    */
-#define OUTPUT_PATH     "/ext/infrared/Sony_CMT_NE3_confirmed.ir"
-#define RECORD_STORAGE  "storage"
-#define ANIM_MS         60      /* animation tick period             */
-#define APP_VIEW        0
+#define SIRC_ADDR_DEFAULT   1       /* Sony audio addr; 0 also common  */
+#define CMD_MIN             0
+#define CMD_MAX             127
+#define NUM_FUNCS           12
+#define SEND_REPS           3       /* IR repetitions per command code  */
+#define INTER_CMD_MS        55      /* pause between successive codes   */
+#define OUTPUT_PATH         "/ext/infrared/Sony_CMT_NE3_confirmed.ir"
+#define RECORD_STORAGE      "storage"
+#define ANIM_MS             60      /* animation tick period            */
+#define APP_VIEW            0
+
+/* Common Sony SIRC-12 device addresses to cycle through on welcome */
+static const uint8_t ADDR_OPTIONS[]  = { 0, 1, 17, 18, 26 };
+static const char*   ADDR_LABELS[]   = { "0=audio", "1=audio", "17=CD", "18=deck", "26=sys" };
+#define NUM_ADDR_OPTIONS    5
 
 /* ══════════════════════════════════════════════════════════════════ */
 /*  State machine                                                    */
@@ -77,6 +83,7 @@ typedef struct {
     uint8_t  round;         /* 1-based round counter            */
     uint8_t  send_prog;     /* command currently being sent     */
     uint8_t  anim;          /* 0-255 wrapping, driven by tick   */
+    uint8_t  addr_idx;      /* index into ADDR_OPTIONS[]        */
     int32_t  codes[NUM_FUNCS];  /* -1 = skipped / not found     */
     bool     done[NUM_FUNCS];
     uint8_t  found_count;
@@ -93,7 +100,7 @@ typedef struct {
     FuriThread*     ir_thread;
 
     /* set by main before thread start; read by thread             */
-    uint8_t  tlo, thi;
+    uint8_t  tlo, thi, taddr;
 
     /* written by IR thread; read by main via custom event         */
     volatile uint8_t t_prog;
@@ -197,26 +204,34 @@ static void draw_welcome(Canvas* c, AppModel* m) {
     canvas_draw_str_aligned(c, 64, 21, AlignCenter, AlignBottom, "SONY IR SEARCH");
     canvas_set_color(c, ColorBlack);
 
+    /* Dynamic subtitle showing current address selection */
+    char info[32];
+    snprintf(info, sizeof(info), "SIRC-12  addr=%s", ADDR_LABELS[m->addr_idx]);
     canvas_set_font(c, FontSecondary);
-    canvas_draw_str_aligned(c, 64, 31, AlignCenter, AlignBottom, "SIRC 12-bit | addr=1 | 0-127");
+    canvas_draw_str_aligned(c, 64, 31, AlignCenter, AlignBottom, info);
 
     /* Animated Flipper→stereo scene */
     draw_flipper(c, 8, 37);
     draw_stereo(c, 106, 37);
     draw_ir_beam(c, 22, 102, 41, m->anim);
 
-    /* Pulsing [OK] Start button */
-    bool fill = (m->anim / 18) % 2 == 0;
-    if(fill) {
-        canvas_draw_rbox(c, 31, 52, 36, 10, 2);
+    /* Address selector row: [^][v] cycle, current address highlighted */
+    bool fill_btn = (m->anim / 18) % 2 == 0;
+    canvas_set_font(c, FontSecondary);
+    canvas_draw_str(c, 2, 52, "[^][v]");
+    if(fill_btn) {
+        canvas_draw_rbox(c, 28, 44, 40, 10, 2);
         canvas_set_color(c, ColorWhite);
-        canvas_draw_str_aligned(c, 49, 61, AlignCenter, AlignBottom, "[OK] Start");
+        canvas_draw_str_aligned(c, 48, 53, AlignCenter, AlignBottom, ADDR_LABELS[m->addr_idx]);
         canvas_set_color(c, ColorBlack);
     } else {
-        canvas_draw_rframe(c, 31, 52, 36, 10, 2);
-        canvas_draw_str_aligned(c, 49, 61, AlignCenter, AlignBottom, "[OK] Start");
+        canvas_draw_rframe(c, 28, 44, 40, 10, 2);
+        canvas_draw_str_aligned(c, 48, 53, AlignCenter, AlignBottom, ADDR_LABELS[m->addr_idx]);
     }
-    canvas_draw_str(c, 92, 62, "[<] Exit");
+
+    /* Bottom row: start / exit */
+    canvas_draw_str(c, 2, 63, "[OK] Start");
+    canvas_draw_str(c, 78, 63, "[Back] Exit");
 }
 
 static void draw_sending(Canvas* c, AppModel* m) {
@@ -432,9 +447,10 @@ static void draw_cb(Canvas* c, void* model) {
 
 static int32_t ir_thread_fn(void* ctx) {
     App* app = (App*)ctx;
-    uint8_t lo  = app->tlo;
-    uint8_t hi  = app->thi;
-    uint8_t mid = (lo + hi) / 2;
+    uint8_t lo   = app->tlo;
+    uint8_t hi   = app->thi;
+    uint8_t addr = app->taddr;
+    uint8_t mid  = (lo + hi) / 2;
 
     for(uint8_t cmd = lo; cmd <= mid; cmd++) {
         if(app->abort) break;
@@ -442,7 +458,7 @@ static int32_t ir_thread_fn(void* ctx) {
         view_dispatcher_send_custom_event(app->vd, EvtIrProgress);
         InfraredMessage msg = {
             .protocol = InfraredProtocolSIRC,
-            .address  = SIRC_ADDR,
+            .address  = addr,
             .command  = cmd,
             .repeat   = false,
         };
@@ -454,10 +470,11 @@ static int32_t ir_thread_fn(void* ctx) {
     return 0;
 }
 
-static void start_ir_thread(App* app, uint8_t lo, uint8_t hi) {
-    app->abort = false;
-    app->tlo   = lo;
-    app->thi   = hi;
+static void start_ir_thread(App* app, uint8_t lo, uint8_t hi, uint8_t addr) {
+    app->abort  = false;
+    app->tlo    = lo;
+    app->thi    = hi;
+    app->taddr  = addr;
     if(app->ir_thread) {
         furi_thread_join(app->ir_thread);
         furi_thread_free(app->ir_thread);
@@ -486,8 +503,7 @@ static void stop_ir_thread(App* app) {
 /*  State transitions                                                */
 /* ══════════════════════════════════════════════════════════════════ */
 
-/* Call while holding the model lock; returns true if IR thread was started
- * (caller must release lock before the thread runs) */
+/* Call while holding the model lock; returns true if IR thread needed */
 static bool advance_to_next(AppModel* m) {
     m->fi++;
     if(m->fi >= NUM_FUNCS) {
@@ -498,7 +514,7 @@ static bool advance_to_next(AppModel* m) {
     m->hi    = CMD_MAX;
     m->round = 1;
     m->state = AppStateSending;
-    return true; /* caller must start IR thread */
+    return true;
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
@@ -508,6 +524,7 @@ static bool advance_to_next(AppModel* m) {
 typedef struct {
     int32_t codes[NUM_FUNCS];
     bool    done[NUM_FUNCS];
+    uint8_t addr;
 } SaveData;
 
 static void save_ir_file(const SaveData* d) {
@@ -527,7 +544,7 @@ static void save_ir_file(const SaveData* d) {
                 "\nname: %s\ntype: parsed\nprotocol: SIRC\n"
                 "address: %02X 00 00 00\ncommand: %02X 00 00 00\n",
                 FUNC_NAMES[i],
-                (uint8_t)SIRC_ADDR,
+                (uint8_t)d->addr,
                 (uint8_t)d->codes[i]);
             if(n > 0) storage_file_write(f, buf, (uint16_t)n);
         }
@@ -543,7 +560,8 @@ static void save_from_model(App* app) {
     AppModel* m = (AppModel*)view_get_model(app->view);
     memcpy(snap.codes, m->codes, sizeof(snap.codes));
     memcpy(snap.done,  m->done,  sizeof(snap.done));
-    m->state = AppStateSaved;          /* transition before releasing lock */
+    snap.addr   = ADDR_OPTIONS[m->addr_idx];
+    m->state    = AppStateSaved;        /* transition before releasing lock */
     view_commit_model(app->view, true);
     save_ir_file(&snap);               /* outside lock — can take time     */
 }
@@ -559,7 +577,7 @@ static bool input_cb(InputEvent* ev, void* ctx) {
     AppModel* m   = (AppModel*)view_get_model(app->view);
     bool redraw   = false;
     bool handled  = true;
-    bool do_start = false; /* set to true → start IR thread after releasing lock */
+    bool do_start = false;
 
     switch(m->state) {
 
@@ -577,6 +595,14 @@ static bool input_cb(InputEvent* ev, void* ctx) {
             view_commit_model(app->view, false);
             view_dispatcher_stop(app->vd);
             return true;
+        } else if(ev->key == InputKeyUp) {
+            m->addr_idx = (uint8_t)((m->addr_idx + 1) % NUM_ADDR_OPTIONS);
+            redraw = true;
+        } else if(ev->key == InputKeyDown) {
+            m->addr_idx = (uint8_t)((m->addr_idx + NUM_ADDR_OPTIONS - 1) % NUM_ADDR_OPTIONS);
+            redraw = true;
+        } else {
+            handled = false;
         }
         break;
 
@@ -584,9 +610,8 @@ static bool input_cb(InputEvent* ev, void* ctx) {
     case AppStateSending:
         if(ev->key == InputKeyBack) {
             app->abort      = true;
-            m->done[m->fi]  = true; /* marks this function as skipped */
+            m->done[m->fi]  = true;
             redraw = true;
-            /* IR thread will finish and post EvtIrDone; advance happens there */
         }
         break;
 
@@ -594,18 +619,15 @@ static bool input_cb(InputEvent* ev, void* ctx) {
     case AppStateAsking: {
         uint8_t mid = (m->lo + m->hi) / 2;
         if(ev->key == InputKeyUp) {
-            /* code is in [lo, mid] */
             m->hi = mid;
             m->round++;
             m->state = AppStateSending;
             redraw   = true;
             do_start = true;
         } else if(ev->key == InputKeyDown) {
-            /* code is in [mid+1, hi] */
             m->lo = (uint8_t)(mid + 1);
             m->round++;
             if(m->lo > m->hi) {
-                /* no range left — treat as not found */
                 m->codes[m->fi] = -1;
                 m->done[m->fi]  = true;
                 m->state = AppStateNotFound;
@@ -615,7 +637,6 @@ static bool input_cb(InputEvent* ev, void* ctx) {
             }
             redraw = true;
         } else if(ev->key == InputKeyRight) {
-            /* resend the same batch without advancing */
             app->resending = true;
             m->state       = AppStateSending;
             redraw         = true;
@@ -646,7 +667,6 @@ static bool input_cb(InputEvent* ev, void* ctx) {
             m->state = AppStateNotFound;
             redraw   = true;
         } else if(ev->key == InputKeyRight) {
-            /* resend just this one code */
             app->resending = true;
             m->state       = AppStateSending;
             redraw         = true;
@@ -664,7 +684,6 @@ static bool input_cb(InputEvent* ev, void* ctx) {
     /* ── Found — OK/back=next, right=test code again ── */
     case AppStateFound:
         if(ev->key == InputKeyRight) {
-            /* test the found code one more time */
             app->resending  = true;
             m->state        = AppStateSending;
             redraw          = true;
@@ -704,9 +723,10 @@ static bool input_cb(InputEvent* ev, void* ctx) {
     }
 
     if(do_start) {
-        uint8_t lo = m->lo, hi = m->hi;
+        uint8_t lo   = m->lo, hi = m->hi;
+        uint8_t addr = ADDR_OPTIONS[m->addr_idx];
         view_commit_model(app->view, redraw);
-        start_ir_thread(app, lo, hi);
+        start_ir_thread(app, lo, hi, addr);
         return true;
     }
 
@@ -732,10 +752,8 @@ static bool custom_event_cb(void* ctx, uint32_t ev) {
         join_ir_thread(app);
 
         if(app->resending) {
-            /* Just a resend — go back to where we came from */
             app->resending = false;
             AppModel* m = (AppModel*)view_get_model(app->view);
-            /* Restore the state we were in before the resend */
             if(m->lo == m->hi)
                 m->state = AppStateSingle;
             else
@@ -744,26 +762,23 @@ static bool custom_event_cb(void* ctx, uint32_t ev) {
             return true;
         }
 
-        /* Normal EvtIrDone — advance state machine */
         AppModel* m = (AppModel*)view_get_model(app->view);
 
         if(m->state != AppStateSending) {
-            /* Stale event — ignore */
             view_commit_model(app->view, false);
             return true;
         }
 
         if(app->abort && m->done[m->fi]) {
-            /* User skipped this function while sending */
             app->abort = false;
             bool need_thread = advance_to_next(m);
             if(need_thread) {
-                uint8_t lo = m->lo, hi = m->hi;
+                uint8_t lo   = m->lo, hi = m->hi;
+                uint8_t addr = ADDR_OPTIONS[m->addr_idx];
                 view_commit_model(app->view, true);
-                start_ir_thread(app, lo, hi);
+                start_ir_thread(app, lo, hi, addr);
                 return true;
             }
-            /* else → AppStateDone, fall through */
 
         } else if(m->lo == m->hi) {
             m->state = AppStateSingle;
@@ -772,10 +787,9 @@ static bool custom_event_cb(void* ctx, uint32_t ev) {
             m->state = AppStateAsking;
         }
 
-        /* If we just reached Done, save and transition to Saved */
         if(m->state == AppStateDone) {
-            view_commit_model(app->view, true); /* show Done screen briefly */
-            save_from_model(app);               /* handles lock internally */
+            view_commit_model(app->view, true);
+            save_from_model(app);
             return true;
         }
 
@@ -794,11 +808,9 @@ static void tick_cb(void* ctx) {
     AppModel* m = (AppModel*)view_get_model(app->view);
     m->anim++;
 
-    /* If we just entered Done (not via EvtIrDone path, e.g. after
-     * advance_to_next from AppStateFound/NotFound in the input_cb), save now */
     if(m->state == AppStateDone) {
-        view_commit_model(app->view, true); /* show Done screen once */
-        save_from_model(app);               /* releases + re-acquires lock internally */
+        view_commit_model(app->view, true);
+        save_from_model(app);
         return;
     }
 
@@ -832,9 +844,10 @@ int32_t sony_ir_search_app(void* p) {
     view_set_draw_callback(app->view, draw_cb);
     view_set_input_callback(app->view, input_cb);
 
-    /* Initialise model — view_allocate_model zeroes memory, just set codes */
+    /* Initialise model */
     AppModel* m = (AppModel*)view_get_model(app->view);
-    m->state = AppStateWelcome;
+    m->state    = AppStateWelcome;
+    m->addr_idx = 1; /* default: ADDR_OPTIONS[1] = 1 (common Sony audio) */
     for(uint8_t i = 0; i < NUM_FUNCS; i++) m->codes[i] = -1;
     view_commit_model(app->view, false);
 
@@ -850,7 +863,6 @@ int32_t sony_ir_search_app(void* p) {
     app->gui = (Gui*)furi_record_open(RECORD_GUI);
     view_dispatcher_attach_to_gui(app->vd, app->gui, ViewDispatcherTypeFullscreen);
 
-    /* Block until view_dispatcher_stop() */
     view_dispatcher_run(app->vd);
 
     /* Cleanup */
