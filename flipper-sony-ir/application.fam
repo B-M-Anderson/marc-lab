@@ -1,0 +1,10 @@
+App(
+    appid="sony_ir_brute",
+    name="Sony IR BruteForce",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="sony_ir_brute_app",
+    requires=["gui", "storage"],
+    stack_size=4 * 1024,
+    fap_category="Tools",
+    fap_version=(1, 0),
+)
