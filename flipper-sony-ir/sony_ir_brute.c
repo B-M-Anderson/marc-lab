@@ -1,7 +1,6 @@
-/* Sony IR Finder v6 — dual mode: Binary Search or Auto-Scan
+/* Sony IR Finder v7 — dual mode: Binary Search or Auto-Scan
  * Protocol: SIRC-12, 40kHz carrier managed by SDK
- * TX:       infrared_send(msg, min_repeat_count) — SDK manages inter-frame timing
- *           (3 frames × 45ms period = ~135ms per code; matches built-in IR app behaviour)
+ * TX:       infrared_send(msg, 3) — 3 frames per code, SDK handles 45ms SIRC period
  * Addresses: addr=1 system, addr=17 CD transport (confirmed CMT-NE3)
  */
 
@@ -127,29 +126,28 @@ static void draw_stereo_icon(Canvas* c, uint8_t x, uint8_t y) {
 /* ── Per-state draw ─────────────────────────────────────────────── */
 static void draw_welcome(Canvas* c, AppModel* m) {
     draw_header(c,m);
-    /* Animated title */
     bool inv=(m->anim/12)%2==0;
     canvas_set_font(c,FontPrimary);
     if(inv){ canvas_draw_box(c,10,10,108,12); canvas_set_color(c,ColorWhite); }
     canvas_draw_str_aligned(c,64,21,AlignCenter,AlignBottom,"IR CRACKER");
     canvas_set_color(c,ColorBlack);
-    /* Mode selector */
     canvas_set_font(c,FontSecondary);
+    /* tip: top of Flipper faces stereo */
+    canvas_draw_str_aligned(c,64,29,AlignCenter,AlignBottom,"Point TOP of Flipper at stereo");
     if(m->binary_mode){
-        canvas_draw_rbox(c,14,23,100,9,2);
+        canvas_draw_rbox(c,14,31,100,9,2);
         canvas_set_color(c,ColorWhite);
-        canvas_draw_str_aligned(c,64,31,AlignCenter,AlignBottom,">> Binary Search <<");
+        canvas_draw_str_aligned(c,64,39,AlignCenter,AlignBottom,">> Binary Search <<");
         canvas_set_color(c,ColorBlack);
-        canvas_draw_str_aligned(c,64,42,AlignCenter,AlignBottom,"   Auto-Scan");
+        canvas_draw_str_aligned(c,64,50,AlignCenter,AlignBottom,"   Auto-Scan");
     } else {
-        canvas_draw_str_aligned(c,64,31,AlignCenter,AlignBottom,"   Binary Search");
-        canvas_draw_rbox(c,14,33,100,9,2);
+        canvas_draw_str_aligned(c,64,39,AlignCenter,AlignBottom,"   Binary Search");
+        canvas_draw_rbox(c,14,41,100,9,2);
         canvas_set_color(c,ColorWhite);
-        canvas_draw_str_aligned(c,64,42,AlignCenter,AlignBottom,">> Auto-Scan <<");
+        canvas_draw_str_aligned(c,64,50,AlignCenter,AlignBottom,">> Auto-Scan <<");
         canvas_set_color(c,ColorBlack);
     }
-    canvas_draw_str_aligned(c,64,50,AlignCenter,AlignBottom,"[^][v] switch mode");
-    canvas_draw_str(c,2,63,"[OK] Start"); canvas_draw_str(c,86,63,"[<] Exit");
+    canvas_draw_str(c,2,63,"[OK] Start  [^][v] mode  [<] Exit");
 }
 
 static void draw_sending(Canvas* c, AppModel* m) {
@@ -172,22 +170,27 @@ static void draw_sending(Canvas* c, AppModel* m) {
 
 static void draw_asking(Canvas* c, AppModel* m) {
     draw_header(c,m);
-    canvas_set_font(c,FontPrimary);
-    canvas_draw_str(c,2,18,FUNC_NAMES[m->fi]);
-    char ab[8]; snprintf(ab,8,"a=%u",FUNC_ADDRS[m->fi]);
     canvas_set_font(c,FontSecondary);
-    canvas_draw_str(c,60,18,ab);
-    char rnd[12]; snprintf(rnd,12,"Rnd %u/7",m->round);
-    canvas_draw_str_aligned(c,126,9,AlignRight,AlignTop,rnd);
     uint8_t mid=(m->lo+m->hi)/2;
-    char sent[28]; snprintf(sent,28,"Sent codes %u - %u",m->lo,mid);
-    canvas_draw_str_aligned(c,64,30,AlignCenter,AlignBottom,sent);
-    if((m->anim/14)%2==0){
-        canvas_set_font(c,FontPrimary);
-        canvas_draw_str_aligned(c,64,44,AlignCenter,AlignBottom,"Did stereo react?");
-    }
+    /* header row: function name + range that was just sent */
+    char hdr[32]; snprintf(hdr,32,"%s  Sent %u-%u  Rnd %u",FUNC_NAMES[m->fi],m->lo,mid,m->round);
+    canvas_draw_str(c,0,16,hdr);
+    canvas_draw_line(c,0,18,127,18);
+    /* big flashing question */
+    canvas_set_font(c,FontPrimary);
+    if((m->anim/10)%2==0)
+        canvas_draw_str_aligned(c,64,30,AlignCenter,AlignBottom,"React during send?");
+    /* clear YES/NO consequences */
     canvas_set_font(c,FontSecondary);
-    canvas_draw_str(c,2,63,"[^]Yes [v]No [>]Again [<]Skip");
+    canvas_draw_rbox(c,0,32,60,11,2);   /* YES button */
+    canvas_set_color(c,ColorWhite);
+    canvas_draw_str(c,3,41,"^YES: code in range");
+    canvas_set_color(c,ColorBlack);
+    char nolab[24];
+    uint8_t next_lo=(uint8_t)(mid+1);
+    snprintf(nolab,24,"vNO: search %u-%u",next_lo,m->hi);
+    canvas_draw_str(c,0,54,nolab);
+    canvas_draw_str(c,0,63,">Resend  <Skip btn");
 }
 
 static void draw_single(Canvas* c, AppModel* m) {
@@ -368,9 +371,9 @@ static void send_code_reps(App* app, uint8_t addr, uint8_t cmd) {
         .command  = cmd,
         .repeat   = false,
     };
-    /* Let SDK send min_repeat_count (3) frames with correct SIRC 45ms inter-frame period.
-     * infrared_send blocks until all frames are transmitted (~135ms total). */
-    infrared_send(&msg, (int)infrared_get_protocol_min_repeat_count(InfraredProtocolSIRC));
+    /* 3 frames per code; SDK manages the 45ms SIRC inter-frame timing.
+     * Hardcoded to avoid any uncertainty from min_repeat_count return value. */
+    infrared_send(&msg, 3);
 }
 
 static int32_t ir_thread_fn(void* ctx) {
