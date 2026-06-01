@@ -1,6 +1,13 @@
-/* Sony IR Search — binary-searches SIRC cmd space for Sony CMT-NE3
+/* Sony IR Search v3 — binary-searches SIRC cmd space for Sony CMT-NE3
  * Protocol: SIRC 12-bit, address = 1, command range 0-127
- * Controls: OK/Up/Down/Back — see each screen's bottom row
+ *
+ * Controls (context-sensitive, shown on every screen):
+ *   Welcome  : [OK] start  [<] exit
+ *   Sending  : [<] skip function
+ *   Asking   : [^] yes  [v] no  [>] resend batch  [<] skip
+ *   Single   : [OK] yes  [v] no  [>] resend code   [<] skip
+ *   Found    : [OK] next  [>] test code again
+ *   Saved    : [OK]/[<] exit
  */
 
 #include <furi.h>
@@ -22,11 +29,11 @@
 #define CMD_MIN         0
 #define CMD_MAX         127
 #define NUM_FUNCS       12
-#define SEND_REPS       3       /* IR repetitions per command code */
-#define INTER_CMD_MS    55      /* pause between successive codes   */
+#define SEND_REPS       3       /* IR repetitions per command code   */
+#define INTER_CMD_MS    55      /* pause between successive codes    */
 #define OUTPUT_PATH     "/ext/infrared/Sony_CMT_NE3_confirmed.ir"
 #define RECORD_STORAGE  "storage"
-#define ANIM_PERIOD_MS  60      /* tick period for animation        */
+#define ANIM_MS         60      /* animation tick period             */
 #define APP_VIEW        0
 
 /* ══════════════════════════════════════════════════════════════════ */
@@ -34,24 +41,23 @@
 /* ══════════════════════════════════════════════════════════════════ */
 
 typedef enum {
-    AppStateWelcome,   /* title screen */
-    AppStateSending,   /* IR thread active, blasting a range */
-    AppStateAsking,    /* range question: ^Yes  vNo  <Skip  */
-    AppStateSingle,    /* final 1-cmd question: OKYes  vNo  */
-    AppStateFound,     /* confirmed code — brief celebration */
-    AppStateNotFound,  /* no code found for this function    */
-    AppStateDone,      /* all funcs done, saving file        */
-    AppStateSaved,     /* file written, show path + exit     */
+    AppStateWelcome,   /* title / start screen                 */
+    AppStateSending,   /* IR thread blasting a range           */
+    AppStateAsking,    /* range question: ^yes vno >resend <skip */
+    AppStateSingle,    /* final 1-cmd confirm: OKyes vno >resend */
+    AppStateFound,     /* code confirmed                       */
+    AppStateNotFound,  /* no code found for this function      */
+    AppStateDone,      /* all functions done, saving           */
+    AppStateSaved,     /* file written                         */
 } AppState;
 
-/* Custom events posted from IR thread → ViewDispatcher */
 typedef enum {
     EvtIrProgress = 0,
     EvtIrDone     = 1,
 } AppEvt;
 
 /* ══════════════════════════════════════════════════════════════════ */
-/*  Data tables                                                      */
+/*  Function table                                                   */
 /* ══════════════════════════════════════════════════════════════════ */
 
 static const char* const FUNC_NAMES[NUM_FUNCS] = {
@@ -61,20 +67,19 @@ static const char* const FUNC_NAMES[NUM_FUNCS] = {
 };
 
 /* ══════════════════════════════════════════════════════════════════ */
-/*  View model  (mutex-locked: written from IR thread + main)       */
+/*  View model  (ViewModelTypeLocking — GUI thread + event loop)    */
 /* ══════════════════════════════════════════════════════════════════ */
 
 typedef struct {
     AppState state;
-    uint8_t  fi;            /* current function index 0-11 */
+    uint8_t  fi;            /* current function index 0-11      */
     uint8_t  lo, hi;        /* binary-search bounds (inclusive) */
-    uint8_t  round;         /* 1-based round counter */
-    uint8_t  send_prog;     /* command currently being sent */
-    uint8_t  anim;          /* 0-255 wrapping, incremented by tick */
-    int32_t  codes[NUM_FUNCS];   /* -1 = skipped / not found */
+    uint8_t  round;         /* 1-based round counter            */
+    uint8_t  send_prog;     /* command currently being sent     */
+    uint8_t  anim;          /* 0-255 wrapping, driven by tick   */
+    int32_t  codes[NUM_FUNCS];  /* -1 = skipped / not found     */
     bool     done[NUM_FUNCS];
     uint8_t  found_count;
-    bool     saving;        /* true while writing file */
 } AppModel;
 
 /* ══════════════════════════════════════════════════════════════════ */
@@ -86,164 +91,178 @@ typedef struct {
     View*           view;
     Gui*            gui;
     FuriThread*     ir_thread;
-    /* Written by main before thread start; read by thread */
+
+    /* set by main before thread start; read by thread             */
     uint8_t  tlo, thi;
-    /* Written by IR thread atomically; read by main via event */
+
+    /* written by IR thread; read by main via custom event         */
     volatile uint8_t t_prog;
     volatile bool    abort;
+    bool             resending; /* true = resend, not advancing search */
 } App;
 
 /* ══════════════════════════════════════════════════════════════════ */
-/*  Drawing helpers                                                  */
+/*  Drawing primitives                                               */
 /* ══════════════════════════════════════════════════════════════════ */
 
-/* Top progress bar: shows completed functions / 12 */
-static void draw_progress(Canvas* c, uint8_t done, uint8_t total) {
-    /* outer frame */
+static void draw_progress_bar(Canvas* c, uint8_t done, uint8_t total) {
     canvas_draw_frame(c, 0, 0, 128, 6);
-    /* filled portion */
     if(done > 0) {
         uint8_t w = (uint8_t)((uint16_t)126 * done / total);
-        canvas_draw_box(c, 1, 1, w, 4);
+        if(w > 0) canvas_draw_box(c, 1, 1, w, 4);
     }
-    /* fraction text on right — tight space, so only if done>0 */
-    char frac[8];
-    snprintf(frac, sizeof(frac), "%u/%u", done, total);
-    canvas_set_font(c, FontSecondary);
-    canvas_draw_str_aligned(c, 127, 1, AlignRight, AlignTop, frac);
 }
 
-/* Thin separator line below the progress bar */
 static void draw_sep(Canvas* c) {
     canvas_draw_line(c, 0, 7, 127, 7);
 }
 
-/* Bottom row control hint — always drawn in FontSecondary at y=62 */
-static void draw_hint(Canvas* c, const char* hint) {
+/* Fraction "N/M" right-aligned in the progress bar */
+static void draw_frac(Canvas* c, uint8_t done, uint8_t total) {
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%u/%u", done, total);
     canvas_set_font(c, FontSecondary);
-    canvas_draw_str_aligned(c, 64, 62, AlignCenter, AlignBottom, hint);
+    canvas_draw_str_aligned(c, 126, 0, AlignRight, AlignTop, buf);
 }
 
-/* Animated IR-beam between x1..x2 at y, anim drives phase */
+/* header = progress bar + separator + fraction */
+static void draw_header(Canvas* c, AppModel* m) {
+    draw_progress_bar(c, m->found_count, NUM_FUNCS);
+    draw_sep(c);
+    draw_frac(c, m->found_count, NUM_FUNCS);
+}
+
+/* Animated IR beam: 4 dots moving from x1 to x2 at row y */
 static void draw_ir_beam(Canvas* c, uint8_t x1, uint8_t x2, uint8_t y, uint8_t anim) {
     uint8_t span = x2 - x1;
-    /* 4 dots equally spaced, phase-shifted by anim */
-    for(int d = 0; d < 4; d++) {
-        uint8_t phase = (uint8_t)(((uint16_t)anim * 2 + d * 16) % (span > 0 ? span : 1));
+    if(span == 0) return;
+    for(uint8_t d = 0; d < 4; d++) {
+        uint8_t phase = (uint8_t)(((uint16_t)anim * 2 + d * 16) % span);
         uint8_t x = x1 + phase;
-        if(x >= x1 && x <= x2) canvas_draw_disc(c, x, y, 1);
+        if(x <= x2) canvas_draw_disc(c, x, y, 1);
     }
 }
 
-/* Small Flipper silhouette (10×8) at (x,y) */
+/* Compact Flipper silhouette ~10×8 */
 static void draw_flipper(Canvas* c, uint8_t x, uint8_t y) {
-    canvas_draw_rframe(c, x, y + 2, 10, 6, 1);   /* body */
-    canvas_draw_line(c, x + 5, y, x + 5, y + 2); /* antenna */
+    canvas_draw_rframe(c, x, y + 2, 10, 6, 1);
+    canvas_draw_line(c, x + 5, y, x + 5, y + 2);
     canvas_draw_dot(c, x + 5, y);
 }
 
-/* Small stereo silhouette (14×8) at (x,y) */
+/* Compact stereo silhouette ~14×8 */
 static void draw_stereo(Canvas* c, uint8_t x, uint8_t y) {
-    canvas_draw_frame(c, x, y, 14, 8);            /* chassis */
-    canvas_draw_disc(c, x + 4, y + 4, 2);         /* left speaker */
-    canvas_draw_disc(c, x + 10, y + 4, 2);        /* right speaker */
-    canvas_draw_line(c, x + 1, y + 1, x + 12, y + 1); /* top detail */
+    canvas_draw_frame(c, x, y, 14, 8);
+    canvas_draw_disc(c, x + 4, y + 4, 2);
+    canvas_draw_disc(c, x + 10, y + 4, 2);
+    canvas_draw_line(c, x + 1, y + 1, x + 12, y + 1);
 }
 
-/* Animated checkmark — draws progressively as anim goes 0→31 */
-static void draw_checkmark(Canvas* c, uint8_t cx, uint8_t cy, uint8_t anim) {
-    uint8_t progress = anim > 31 ? 31 : anim;
-    /* tick: short stroke down-right then long stroke up-right */
-    /* first half (0-10): down stroke */
-    if(progress > 0) {
-        uint8_t p1 = progress > 10 ? 10 : progress;
-        canvas_draw_line(c, cx, cy, cx + p1 / 2, cy + p1 / 2);
+/* Growing checkmark animation (anim 0→32) */
+static void draw_checkmark(Canvas* c, uint8_t ox, uint8_t oy, uint8_t anim) {
+    uint8_t p = anim > 32 ? 32 : anim;
+    if(p > 0) {
+        uint8_t p1 = p > 10 ? 10 : p;
+        canvas_draw_line(c, ox, oy, ox + p1 / 2, oy + p1 / 2);
     }
-    /* second half (10-31): long up-right stroke */
-    if(progress > 10) {
-        uint8_t p2 = progress - 10;
-        canvas_draw_line(c, cx + 5, cy + 5, cx + 5 + p2, cy + 5 - p2 / 2);
+    if(p > 10) {
+        uint8_t p2 = (uint8_t)(p - 10);
+        uint8_t cap = p2 > 22 ? 22 : p2;
+        canvas_draw_line(c, ox + 5, oy + 5, ox + 5 + cap, oy + 5 - cap / 2);
     }
+}
+
+/* Compute estimated seconds for current sending round */
+static uint32_t round_eta_seconds(uint8_t lo, uint8_t hi) {
+    uint8_t mid = (lo + hi) / 2;
+    uint32_t cmds = (uint32_t)(mid - lo + 1);
+    /* each command: ~45ms × 3 reps + 55ms inter-cmd gap ≈ 190ms */
+    return (cmds * 190u + 500u) / 1000u;
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
-/*  Per-state draw routines                                          */
+/*  Per-state draw functions                                         */
 /* ══════════════════════════════════════════════════════════════════ */
 
 static void draw_welcome(Canvas* c, AppModel* m) {
-    draw_progress(c, m->found_count, NUM_FUNCS);
-    draw_sep(c);
+    draw_header(c, m);
 
-    /* Pulsing title */
+    /* Alternating inverted / normal title for a shimmer effect */
+    bool inv = (m->anim / 12) % 2 == 0;
     canvas_set_font(c, FontPrimary);
-    /* XOR blink on even frames — gives a subtle shimmer */
-    if((m->anim / 8) % 2 == 0) canvas_set_color(c, ColorBlack);
-    else canvas_set_color(c, ColorBlack); /* keep solid, use XOR on box */
-    canvas_draw_str_aligned(c, 64, 20, AlignCenter, AlignBottom, "SONY IR SEARCH");
+    if(inv) {
+        canvas_draw_box(c, 14, 10, 100, 12);
+        canvas_set_color(c, ColorWhite);
+    }
+    canvas_draw_str_aligned(c, 64, 21, AlignCenter, AlignBottom, "SONY IR SEARCH");
     canvas_set_color(c, ColorBlack);
 
     canvas_set_font(c, FontSecondary);
-    canvas_draw_str_aligned(c, 64, 30, AlignCenter, AlignBottom, "12 Functions  |  SIRC addr=1");
+    canvas_draw_str_aligned(c, 64, 31, AlignCenter, AlignBottom, "SIRC 12-bit | addr=1 | 0-127");
 
-    /* Animated IR scene */
+    /* Animated Flipper→stereo scene */
     draw_flipper(c, 8, 37);
     draw_stereo(c, 106, 37);
     draw_ir_beam(c, 22, 102, 41, m->anim);
 
-    /* Pulsing OK button hint */
-    if((m->anim / 16) % 2 == 0) {
-        canvas_draw_rbox(c, 32, 53, 34, 9, 2);
+    /* Pulsing [OK] Start button */
+    bool fill = (m->anim / 18) % 2 == 0;
+    if(fill) {
+        canvas_draw_rbox(c, 31, 52, 36, 10, 2);
         canvas_set_color(c, ColorWhite);
-        canvas_draw_str_aligned(c, 49, 62, AlignCenter, AlignBottom, "[OK] Start");
+        canvas_draw_str_aligned(c, 49, 61, AlignCenter, AlignBottom, "[OK] Start");
         canvas_set_color(c, ColorBlack);
     } else {
-        canvas_draw_rframe(c, 32, 53, 34, 9, 2);
-        canvas_draw_str_aligned(c, 49, 62, AlignCenter, AlignBottom, "[OK] Start");
+        canvas_draw_rframe(c, 31, 52, 36, 10, 2);
+        canvas_draw_str_aligned(c, 49, 61, AlignCenter, AlignBottom, "[OK] Start");
     }
-    canvas_draw_str_aligned(c, 106, 62, AlignCenter, AlignBottom, "[<] Exit");
+    canvas_draw_str(c, 92, 62, "[<] Exit");
 }
 
 static void draw_sending(Canvas* c, AppModel* m) {
-    draw_progress(c, m->found_count, NUM_FUNCS);
-    draw_sep(c);
+    draw_header(c, m);
 
-    /* Function name + round */
     canvas_set_font(c, FontPrimary);
     canvas_draw_str(c, 2, 18, FUNC_NAMES[m->fi]);
+
     canvas_set_font(c, FontSecondary);
-    char rnd[16];
+    char rnd[12];
     snprintf(rnd, sizeof(rnd), "Rnd %u/7", m->round);
     canvas_draw_str_aligned(c, 126, 9, AlignRight, AlignTop, rnd);
 
-    /* Range indicator */
     uint8_t mid = (m->lo + m->hi) / 2;
     char rng[28];
-    snprintf(rng, sizeof(rng), "Testing codes %u-%u", m->lo, mid);
-    canvas_set_font(c, FontSecondary);
+    snprintf(rng, sizeof(rng), "Testing %u-%u", m->lo, mid);
     canvas_draw_str(c, 2, 28, rng);
 
-    /* Animated IR scene (compact) */
+    /* ETA */
+    uint32_t eta = round_eta_seconds(m->lo, m->hi);
+    char etastr[16];
+    if(eta > 0) snprintf(etastr, sizeof(etastr), "~%lus", (unsigned long)eta);
+    else snprintf(etastr, sizeof(etastr), "<1s");
+    canvas_draw_str_aligned(c, 126, 19, AlignRight, AlignTop, etastr);
+
+    /* IR scene */
     draw_flipper(c, 2, 34);
     draw_stereo(c, 106, 34);
     draw_ir_beam(c, 16, 102, 38, m->anim);
 
-    /* Current code */
-    char prog[22];
+    /* Current code progress */
+    char prog[20];
     snprintf(prog, sizeof(prog), "Sending: %u", m->send_prog);
-    canvas_set_font(c, FontSecondary);
-    canvas_draw_str(c, 2, 52, prog);
+    canvas_draw_str(c, 2, 53, prog);
 
-    draw_hint(c, "[<] Skip function");
+    canvas_draw_str(c, 2, 63, "[<] Skip");
 }
 
 static void draw_asking(Canvas* c, AppModel* m) {
-    draw_progress(c, m->found_count, NUM_FUNCS);
-    draw_sep(c);
+    draw_header(c, m);
 
     canvas_set_font(c, FontPrimary);
     canvas_draw_str(c, 2, 18, FUNC_NAMES[m->fi]);
+
     canvas_set_font(c, FontSecondary);
-    char rnd[16];
+    char rnd[12];
     snprintf(rnd, sizeof(rnd), "Rnd %u/7", m->round);
     canvas_draw_str_aligned(c, 126, 9, AlignRight, AlignTop, rnd);
 
@@ -252,136 +271,149 @@ static void draw_asking(Canvas* c, AppModel* m) {
     snprintf(sent, sizeof(sent), "Sent codes %u - %u", m->lo, mid);
     canvas_draw_str_aligned(c, 64, 30, AlignCenter, AlignBottom, sent);
 
-    /* Big question — slightly animated (XOR blink on question mark) */
-    canvas_set_font(c, FontPrimary);
-    canvas_draw_str_aligned(c, 64, 44, AlignCenter, AlignBottom, "Did stereo react?");
+    /* Blinking question */
+    if((m->anim / 14) % 2 == 0) {
+        canvas_set_font(c, FontPrimary);
+        canvas_draw_str_aligned(c, 64, 44, AlignCenter, AlignBottom, "Did stereo react?");
+    }
 
-    /* Button row */
     canvas_set_font(c, FontSecondary);
-    canvas_draw_str(c, 4,  60, "[^] Yes");
-    canvas_draw_str(c, 50, 60, "[v] No");
-    canvas_draw_str(c, 92, 60, "[<] Skip");
+    canvas_draw_str(c,  2, 63, "[^]Yes");
+    canvas_draw_str(c, 36, 63, "[v]No");
+    canvas_draw_str(c, 66, 63, "[>]Again");
+    canvas_draw_str(c, 101, 63, "[<]Skip");
 }
 
 static void draw_single(Canvas* c, AppModel* m) {
-    draw_progress(c, m->found_count, NUM_FUNCS);
-    draw_sep(c);
+    draw_header(c, m);
 
     canvas_set_font(c, FontPrimary);
     canvas_draw_str(c, 2, 18, FUNC_NAMES[m->fi]);
 
-    /* Show the exact code being tested */
-    char codestr[24];
-    snprintf(codestr, sizeof(codestr), "Code: %u  (0x%02X)", m->lo, m->lo);
-    canvas_set_font(c, FontSecondary);
-    canvas_draw_str_aligned(c, 64, 30, AlignCenter, AlignBottom, codestr);
+    /* Highlighted code box — pulse with anim */
+    uint8_t pulse = (m->anim / 6) % 2;
+    if(pulse) canvas_draw_rbox(c, 18, 20, 92, 12, 2);
+    else       canvas_draw_rframe(c, 18, 20, 92, 12, 2);
 
-    /* Pulse animation around the code box */
-    uint8_t p = (m->anim / 4) % 4;
-    canvas_draw_rframe(c, 20 - p, 20 - p, 88 + p * 2, 14 + p * 2, 3);
+    char codestr[22];
+    snprintf(codestr, sizeof(codestr), "Code %u  (0x%02X)", m->lo, m->lo);
+    canvas_set_font(c, FontSecondary);
+    if(pulse) canvas_set_color(c, ColorWhite);
+    canvas_draw_str_aligned(c, 64, 30, AlignCenter, AlignBottom, codestr);
+    canvas_set_color(c, ColorBlack);
 
     canvas_set_font(c, FontPrimary);
-    canvas_draw_str_aligned(c, 64, 45, AlignCenter, AlignBottom, "Did it work?");
+    canvas_draw_str_aligned(c, 64, 44, AlignCenter, AlignBottom, "Did it trigger?");
 
     canvas_set_font(c, FontSecondary);
-    canvas_draw_str(c, 2,  62, "[OK] Yes");
-    canvas_draw_str(c, 50, 62, "[v] No");
-    canvas_draw_str(c, 94, 62, "[<] Skip");
+    canvas_draw_str(c,  2, 63, "[OK]Yes");
+    canvas_draw_str(c, 40, 63, "[v]No");
+    canvas_draw_str(c, 66, 63, "[>]Resend");
+    canvas_draw_str(c, 104, 63, "[<]Skip");
 }
 
 static void draw_found(Canvas* c, AppModel* m) {
-    draw_progress(c, m->found_count, NUM_FUNCS);
-    draw_sep(c);
+    draw_header(c, m);
 
-    /* Checkmark animation */
-    draw_checkmark(c, 100, 14, m->anim);
+    /* Animated checkmark top-right */
+    draw_checkmark(c, 108, 13, m->anim);
 
     canvas_set_font(c, FontPrimary);
     canvas_draw_str_aligned(c, 55, 22, AlignCenter, AlignBottom, "FOUND!");
 
     char detail[28];
     snprintf(
-        detail, sizeof(detail), "%s = %u (0x%02X)",
+        detail, sizeof(detail), "%s = %u  (0x%02X)",
         FUNC_NAMES[m->fi],
         (uint8_t)m->codes[m->fi],
         (uint8_t)m->codes[m->fi]);
     canvas_set_font(c, FontSecondary);
-    canvas_draw_str_aligned(c, 64, 36, AlignCenter, AlignBottom, detail);
+    canvas_draw_str_aligned(c, 64, 34, AlignCenter, AlignBottom, detail);
 
-    /* Starburst effect using lines from center */
-    uint8_t bx = 64, by = 46;
-    uint8_t r = 6 + (m->anim % 4);
-    canvas_draw_circle(c, bx, by, r);
-    if(m->anim % 8 < 4) canvas_draw_disc(c, bx, by, r / 2);
+    /* Pulsing circle */
+    uint8_t r = 5 + (m->anim % 4);
+    canvas_draw_circle(c, 64, 47, r);
+    if((m->anim / 4) % 2 == 0) canvas_draw_disc(c, 64, 47, r - 3 > 0 ? r - 3 : 1);
 
-    draw_hint(c, "[OK] Next function");
+    canvas_set_font(c, FontSecondary);
+    canvas_draw_str(c, 2, 63, "[OK] Next");
+    canvas_draw_str(c, 66, 63, "[>] Test again");
 }
 
 static void draw_not_found(Canvas* c, AppModel* m) {
-    draw_progress(c, m->found_count, NUM_FUNCS);
-    draw_sep(c);
+    draw_header(c, m);
 
     canvas_set_font(c, FontPrimary);
     canvas_draw_str_aligned(c, 64, 24, AlignCenter, AlignBottom, "Not Found");
 
     canvas_set_font(c, FontSecondary);
-    char line[32];
+    char line[36];
     snprintf(line, sizeof(line), "%s: no code identified", FUNC_NAMES[m->fi]);
-    canvas_draw_str_aligned(c, 64, 38, AlignCenter, AlignBottom, line);
+    canvas_draw_str_aligned(c, 64, 36, AlignCenter, AlignBottom, line);
 
-    /* Sad X */
-    uint8_t cx = 64, cy = 48;
-    canvas_draw_line(c, cx - 5, cy - 5, cx + 5, cy + 5);
-    canvas_draw_line(c, cx + 5, cy - 5, cx - 5, cy + 5);
+    /* X mark */
+    canvas_draw_line(c, 58, 42, 70, 54);
+    canvas_draw_line(c, 70, 42, 58, 54);
 
-    draw_hint(c, "[OK] Next function");
+    canvas_draw_str_aligned(c, 64, 63, AlignCenter, AlignBottom, "[OK] Next function");
 }
 
 static void draw_done(Canvas* c, AppModel* m) {
-    draw_progress(c, m->found_count, NUM_FUNCS);
+    /* use full bar while saving */
+    draw_progress_bar(c, NUM_FUNCS, NUM_FUNCS);
     draw_sep(c);
 
     canvas_set_font(c, FontPrimary);
-    char summary[28];
-    snprintf(summary, sizeof(summary), "Done!  %u/%u codes found", m->found_count, NUM_FUNCS);
+    char summary[32];
+    snprintf(summary, sizeof(summary), "Done!  %u/%u found", m->found_count, NUM_FUNCS);
     canvas_draw_str_aligned(c, 64, 22, AlignCenter, AlignBottom, summary);
 
-    if(m->saving) {
-        canvas_set_font(c, FontSecondary);
-        canvas_draw_str_aligned(c, 64, 34, AlignCenter, AlignBottom, "Writing .ir file...");
-        /* Animated progress dots */
-        uint8_t dots = (m->anim / 8) % 4;
-        char dotstr[5] = "    ";
-        for(uint8_t i = 0; i < dots; i++) dotstr[i] = '.';
-        canvas_draw_str_aligned(c, 64, 46, AlignCenter, AlignBottom, dotstr);
-    }
+    canvas_set_font(c, FontSecondary);
+    canvas_draw_str_aligned(c, 64, 34, AlignCenter, AlignBottom, "Saving remote file...");
+
+    /* Animated dots */
+    char dots[5] = {0};
+    uint8_t n = (m->anim / 10) % 4;
+    for(uint8_t i = 0; i < n; i++) dots[i] = '.';
+    canvas_draw_str_aligned(c, 64, 46, AlignCenter, AlignBottom, dots);
 }
 
 static void draw_saved(Canvas* c, AppModel* m) {
-    UNUSED(m);
-    draw_progress(c, NUM_FUNCS, NUM_FUNCS);
+    draw_progress_bar(c, NUM_FUNCS, NUM_FUNCS);
     draw_sep(c);
+    draw_frac(c, NUM_FUNCS, NUM_FUNCS);
 
     canvas_set_font(c, FontPrimary);
-    canvas_draw_str_aligned(c, 64, 20, AlignCenter, AlignBottom, "Remote Saved!");
+    char hdr[24];
+    snprintf(hdr, sizeof(hdr), "Saved! (%u found)", m->found_count);
+    canvas_draw_str_aligned(c, 64, 20, AlignCenter, AlignBottom, hdr);
 
+    /* Scrolling results strip */
     canvas_set_font(c, FontSecondary);
-    canvas_draw_str_aligned(c, 64, 32, AlignCenter, AlignBottom, "Sony_CMT_NE3_confirmed.ir");
-    canvas_draw_str_aligned(c, 64, 42, AlignCenter, AlignBottom, "saved to /ext/infrared/");
-    canvas_draw_str_aligned(c, 64, 52, AlignCenter, AlignBottom, "Load it in the IR Remote app");
+    /* show up to 3 rows of results, cycling via anim */
+    uint8_t start = ((uint16_t)(m->anim / 40)) % NUM_FUNCS;
+    for(uint8_t row = 0; row < 3; row++) {
+        uint8_t idx = (start + row) % NUM_FUNCS;
+        char row_buf[24];
+        if(m->codes[idx] >= 0)
+            snprintf(row_buf, sizeof(row_buf), "%-6s %3u (0x%02X)",
+                     FUNC_NAMES[idx], (uint8_t)m->codes[idx], (uint8_t)m->codes[idx]);
+        else
+            snprintf(row_buf, sizeof(row_buf), "%-6s  ---", FUNC_NAMES[idx]);
+        canvas_draw_str(c, 4, (uint8_t)(30 + row * 10), row_buf);
+    }
 
-    draw_hint(c, "[<] Exit");
+    canvas_draw_str_aligned(c, 64, 63, AlignCenter, AlignBottom, "[OK]/[<] Exit");
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
-/*  Main draw callback (dispatches to per-state functions)          */
+/*  Main draw dispatch                                               */
 /* ══════════════════════════════════════════════════════════════════ */
 
-static void draw_cb(Canvas* c, void* ctx) {
-    AppModel* m = (AppModel*)ctx;
+static void draw_cb(Canvas* c, void* model) {
+    AppModel* m = (AppModel*)model;
     canvas_clear(c);
     canvas_set_color(c, ColorBlack);
-
     switch(m->state) {
     case AppStateWelcome:  draw_welcome(c, m);    break;
     case AppStateSending:  draw_sending(c, m);    break;
@@ -395,39 +427,19 @@ static void draw_cb(Canvas* c, void* ctx) {
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
-/*  State transition helpers (called with model lock held)          */
-/* ══════════════════════════════════════════════════════════════════ */
-
-
-static void advance_to_next(AppModel* m) {
-    m->fi++;
-    if(m->fi >= NUM_FUNCS) {
-        m->saving = true;
-        m->state  = AppStateDone;
-    } else {
-        m->lo    = CMD_MIN;
-        m->hi    = CMD_MAX;
-        m->round = 1;
-        m->state = AppStateSending;
-    }
-}
-
-/* ══════════════════════════════════════════════════════════════════ */
 /*  IR worker thread                                                 */
 /* ══════════════════════════════════════════════════════════════════ */
 
 static int32_t ir_thread_fn(void* ctx) {
     App* app = (App*)ctx;
-    uint8_t lo = app->tlo;
-    uint8_t hi = app->thi;
+    uint8_t lo  = app->tlo;
+    uint8_t hi  = app->thi;
     uint8_t mid = (lo + hi) / 2;
 
     for(uint8_t cmd = lo; cmd <= mid; cmd++) {
         if(app->abort) break;
-
         app->t_prog = cmd;
         view_dispatcher_send_custom_event(app->vd, EvtIrProgress);
-
         InfraredMessage msg = {
             .protocol = InfraredProtocolSIRC,
             .address  = SIRC_ADDR,
@@ -449,25 +461,56 @@ static void start_ir_thread(App* app, uint8_t lo, uint8_t hi) {
     if(app->ir_thread) {
         furi_thread_join(app->ir_thread);
         furi_thread_free(app->ir_thread);
+        app->ir_thread = NULL;
     }
     app->ir_thread = furi_thread_alloc_ex("ir_send", 1024, ir_thread_fn, app);
     furi_thread_start(app->ir_thread);
 }
 
-static void stop_ir_thread(App* app) {
+static void join_ir_thread(App* app) {
     if(app->ir_thread) {
-        app->abort = true;
         furi_thread_join(app->ir_thread);
         furi_thread_free(app->ir_thread);
         app->ir_thread = NULL;
     }
 }
 
+static void stop_ir_thread(App* app) {
+    if(app->ir_thread) {
+        app->abort = true;
+        join_ir_thread(app);
+    }
+}
+
 /* ══════════════════════════════════════════════════════════════════ */
-/*  File save                                                        */
+/*  State transitions                                                */
 /* ══════════════════════════════════════════════════════════════════ */
 
-static void save_ir_file(AppModel* m) {
+/* Call while holding the model lock; returns true if IR thread was started
+ * (caller must release lock before the thread runs) */
+static bool advance_to_next(AppModel* m) {
+    m->fi++;
+    if(m->fi >= NUM_FUNCS) {
+        m->state = AppStateDone;
+        return false;
+    }
+    m->lo    = CMD_MIN;
+    m->hi    = CMD_MAX;
+    m->round = 1;
+    m->state = AppStateSending;
+    return true; /* caller must start IR thread */
+}
+
+/* ══════════════════════════════════════════════════════════════════ */
+/*  File save (call WITHOUT holding the model lock)                 */
+/* ══════════════════════════════════════════════════════════════════ */
+
+typedef struct {
+    int32_t codes[NUM_FUNCS];
+    bool    done[NUM_FUNCS];
+} SaveData;
+
+static void save_ir_file(const SaveData* d) {
     Storage* st = (Storage*)furi_record_open(RECORD_STORAGE);
     storage_common_mkdir(st, "/ext/infrared");
 
@@ -477,7 +520,7 @@ static void save_ir_file(AppModel* m) {
         storage_file_write(f, hdr, (uint16_t)strlen(hdr));
 
         for(uint8_t i = 0; i < NUM_FUNCS; i++) {
-            if(!m->done[i] || m->codes[i] < 0) continue;
+            if(!d->done[i] || d->codes[i] < 0) continue;
             char buf[128];
             int n = snprintf(
                 buf, sizeof(buf),
@@ -485,7 +528,7 @@ static void save_ir_file(AppModel* m) {
                 "address: %02X 00 00 00\ncommand: %02X 00 00 00\n",
                 FUNC_NAMES[i],
                 (uint8_t)SIRC_ADDR,
-                (uint8_t)m->codes[i]);
+                (uint8_t)d->codes[i]);
             if(n > 0) storage_file_write(f, buf, (uint16_t)n);
         }
         storage_file_close(f);
@@ -494,17 +537,29 @@ static void save_ir_file(AppModel* m) {
     furi_record_close(RECORD_STORAGE);
 }
 
+/* Snapshot model data, release lock, then save (lock-safe) */
+static void save_from_model(App* app) {
+    SaveData snap;
+    AppModel* m = (AppModel*)view_get_model(app->view);
+    memcpy(snap.codes, m->codes, sizeof(snap.codes));
+    memcpy(snap.done,  m->done,  sizeof(snap.done));
+    m->state = AppStateSaved;          /* transition before releasing lock */
+    view_commit_model(app->view, true);
+    save_ir_file(&snap);               /* outside lock — can take time     */
+}
+
 /* ══════════════════════════════════════════════════════════════════ */
-/*  Input callback (runs on GUI thread — just post to dispatcher)   */
+/*  Input callback  (GUI thread → sets model, may start IR thread)  */
 /* ══════════════════════════════════════════════════════════════════ */
 
 static bool input_cb(InputEvent* ev, void* ctx) {
     App* app = (App*)ctx;
     if(ev->type != InputTypePress && ev->type != InputTypeRepeat) return false;
 
-    AppModel* m = (AppModel*)view_get_model(app->view);
-    bool redraw = false;
-    bool handled = true;
+    AppModel* m   = (AppModel*)view_get_model(app->view);
+    bool redraw   = false;
+    bool handled  = true;
+    bool do_start = false; /* set to true → start IR thread after releasing lock */
 
     switch(m->state) {
 
@@ -517,106 +572,142 @@ static bool input_cb(InputEvent* ev, void* ctx) {
             m->round = 1;
             m->state = AppStateSending;
             redraw   = true;
-            /* start IR thread after releasing model lock */
+            do_start = true;
         } else if(ev->key == InputKeyBack) {
+            view_commit_model(app->view, false);
             view_dispatcher_stop(app->vd);
+            return true;
         }
         break;
 
-    /* ── Sending: only Back = skip ── */
+    /* ── Sending — only skip ── */
     case AppStateSending:
         if(ev->key == InputKeyBack) {
-            app->abort    = true;       /* IR thread sees this */
-            m->done[m->fi] = true;      /* mark skipped */
+            app->abort      = true;
+            m->done[m->fi]  = true; /* marks this function as skipped */
             redraw = true;
-            /* IR thread will post EvtIrDone soon; we advance in that handler */
+            /* IR thread will finish and post EvtIrDone; advance happens there */
         }
         break;
 
-    /* ── Asking: Up=yes Down=no Back=skip ── */
+    /* ── Asking — yes / no / resend / skip ── */
     case AppStateAsking: {
         uint8_t mid = (m->lo + m->hi) / 2;
         if(ev->key == InputKeyUp) {
-            m->hi = mid;           /* code in lo..mid */
+            /* code is in [lo, mid] */
+            m->hi = mid;
             m->round++;
+            m->state = AppStateSending;
+            redraw   = true;
+            do_start = true;
         } else if(ev->key == InputKeyDown) {
-            m->lo = mid + 1;       /* code in mid+1..hi */
+            /* code is in [mid+1, hi] */
+            m->lo = (uint8_t)(mid + 1);
             m->round++;
-        } else if(ev->key == InputKeyBack) {
-            m->done[m->fi] = true; /* skip */
-            advance_to_next(m);
+            if(m->lo > m->hi) {
+                /* no range left — treat as not found */
+                m->codes[m->fi] = -1;
+                m->done[m->fi]  = true;
+                m->state = AppStateNotFound;
+            } else {
+                m->state = AppStateSending;
+                do_start = true;
+            }
             redraw = true;
-            break;
-        } else {
-            handled = false; break;
-        }
-
-        if(m->lo == m->hi) {
-            /* narrowed to single — send it and ask explicitly */
-            m->state = AppStateSending;
-        } else if(m->lo > m->hi) {
-            /* shouldn't happen but guard anyway */
+        } else if(ev->key == InputKeyRight) {
+            /* resend the same batch without advancing */
+            app->resending = true;
+            m->state       = AppStateSending;
+            redraw         = true;
+            do_start       = true;
+        } else if(ev->key == InputKeyBack) {
             m->done[m->fi] = true;
-            advance_to_next(m);
+            bool need_thread = advance_to_next(m);
+            redraw   = true;
+            do_start = need_thread;
         } else {
-            m->state = AppStateSending;
+            handled = false;
         }
-        redraw = true;
         break;
     }
 
-    /* ── Single: OK=yes Down/Back=no ── */
+    /* ── Single — OK=yes, down=no, right=resend, back=skip ── */
     case AppStateSingle:
         if(ev->key == InputKeyOk) {
             m->codes[m->fi] = (int32_t)m->lo;
             m->done[m->fi]  = true;
             m->found_count++;
+            m->anim  = 0;
             m->state = AppStateFound;
-            m->anim  = 0; /* restart checkmark anim */
             redraw   = true;
-        } else if(ev->key == InputKeyDown || ev->key == InputKeyBack) {
-            /* This specific code didn't work */
+        } else if(ev->key == InputKeyDown) {
             m->codes[m->fi] = -1;
             m->done[m->fi]  = true;
             m->state = AppStateNotFound;
             redraw   = true;
+        } else if(ev->key == InputKeyRight) {
+            /* resend just this one code */
+            app->resending = true;
+            m->state       = AppStateSending;
+            redraw         = true;
+            do_start       = true;
+        } else if(ev->key == InputKeyBack) {
+            m->done[m->fi] = true;
+            bool need_thread = advance_to_next(m);
+            redraw   = true;
+            do_start = need_thread;
+        } else {
+            handled = false;
         }
         break;
 
-    /* ── Found / NotFound: OK or Back advances ── */
+    /* ── Found — OK/back=next, right=test code again ── */
     case AppStateFound:
+        if(ev->key == InputKeyRight) {
+            /* test the found code one more time */
+            app->resending  = true;
+            m->state        = AppStateSending;
+            redraw          = true;
+            do_start        = true;
+        } else if(ev->key == InputKeyOk || ev->key == InputKeyBack) {
+            bool need_thread = advance_to_next(m);
+            redraw   = true;
+            do_start = need_thread;
+        } else {
+            handled = false;
+        }
+        break;
+
+    /* ── Not found — OK/back=next ── */
     case AppStateNotFound:
         if(ev->key == InputKeyOk || ev->key == InputKeyBack) {
-            advance_to_next(m);
-            redraw = true;
+            bool need_thread = advance_to_next(m);
+            redraw   = true;
+            do_start = need_thread;
+        } else {
+            handled = false;
         }
         break;
 
-    /* ── Done: shouldn't get input here normally ── */
+    /* ── Done / Saved ── */
     case AppStateDone:
         handled = false;
         break;
 
-    /* ── Saved: Back exits ── */
     case AppStateSaved:
-        if(ev->key == InputKeyBack || ev->key == InputKeyOk) {
+        if(ev->key == InputKeyOk || ev->key == InputKeyBack) {
+            view_commit_model(app->view, false);
             view_dispatcher_stop(app->vd);
+            return true;
         }
         break;
     }
 
-    /* If we just set state = AppStateSending, fire off the IR thread */
-    if(m->state == AppStateSending && redraw) {
-        /* only start a new thread if the previous one isn't already running
-         * (the abort from Back in Sending state will let the existing thread
-         * finish via EvtIrDone, which handles the skip — we don't start a new
-         * one here in that case) */
-        if(!app->abort) {
-            uint8_t lo = m->lo, hi = m->hi;
-            view_commit_model(app->view, true);
-            start_ir_thread(app, lo, hi);
-            return true;
-        }
+    if(do_start) {
+        uint8_t lo = m->lo, hi = m->hi;
+        view_commit_model(app->view, redraw);
+        start_ir_thread(app, lo, hi);
+        return true;
     }
 
     view_commit_model(app->view, redraw);
@@ -624,58 +715,78 @@ static bool input_cb(InputEvent* ev, void* ctx) {
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
-/*  Custom event callback (called on main thread by ViewDispatcher) */
+/*  Custom event callback  (ViewDispatcher event loop, main thread) */
 /* ══════════════════════════════════════════════════════════════════ */
 
 static bool custom_event_cb(void* ctx, uint32_t ev) {
     App* app = (App*)ctx;
-    AppModel* m = (AppModel*)view_get_model(app->view);
-    bool redraw = false;
 
     if(ev == EvtIrProgress) {
+        AppModel* m = (AppModel*)view_get_model(app->view);
         m->send_prog = app->t_prog;
-        redraw = true;
-
-    } else if(ev == EvtIrDone) {
-        /* join the thread so it's cleaned up */
-        if(app->ir_thread) {
-            furi_thread_join(app->ir_thread);
-            furi_thread_free(app->ir_thread);
-            app->ir_thread = NULL;
-        }
-
-        if(m->state == AppStateSending) {
-            if(app->abort && m->done[m->fi]) {
-                /* user pressed Back during sending — skip was already set */
-                app->abort = false;
-                advance_to_next(m);
-            } else if(m->lo == m->hi) {
-                /* single code — ask specifically */
-                m->state = AppStateSingle;
-            } else {
-                /* show the range question */
-                m->state = AppStateAsking;
-            }
-            redraw = true;
-        }
-
-        /* If we just transitioned to Done, save the file */
-        if(m->state == AppStateDone) {
-            view_commit_model(app->view, true);
-            save_ir_file(m);
-            m = (AppModel*)view_get_model(app->view);
-            m->saving = false;
-            m->state  = AppStateSaved;
-            redraw    = true;
-        }
+        view_commit_model(app->view, true);
+        return true;
     }
 
-    view_commit_model(app->view, redraw);
+    if(ev == EvtIrDone) {
+        join_ir_thread(app);
+
+        if(app->resending) {
+            /* Just a resend — go back to where we came from */
+            app->resending = false;
+            AppModel* m = (AppModel*)view_get_model(app->view);
+            /* Restore the state we were in before the resend */
+            if(m->lo == m->hi)
+                m->state = AppStateSingle;
+            else
+                m->state = AppStateAsking;
+            view_commit_model(app->view, true);
+            return true;
+        }
+
+        /* Normal EvtIrDone — advance state machine */
+        AppModel* m = (AppModel*)view_get_model(app->view);
+
+        if(m->state != AppStateSending) {
+            /* Stale event — ignore */
+            view_commit_model(app->view, false);
+            return true;
+        }
+
+        if(app->abort && m->done[m->fi]) {
+            /* User skipped this function while sending */
+            app->abort = false;
+            bool need_thread = advance_to_next(m);
+            if(need_thread) {
+                uint8_t lo = m->lo, hi = m->hi;
+                view_commit_model(app->view, true);
+                start_ir_thread(app, lo, hi);
+                return true;
+            }
+            /* else → AppStateDone, fall through */
+
+        } else if(m->lo == m->hi) {
+            m->state = AppStateSingle;
+
+        } else {
+            m->state = AppStateAsking;
+        }
+
+        /* If we just reached Done, save and transition to Saved */
+        if(m->state == AppStateDone) {
+            view_commit_model(app->view, true); /* show Done screen briefly */
+            save_from_model(app);               /* handles lock internally */
+            return true;
+        }
+
+        view_commit_model(app->view, true);
+    }
+
     return true;
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
-/*  Tick callback — drives animation counter                        */
+/*  Tick callback — animation + Done→save transition                */
 /* ══════════════════════════════════════════════════════════════════ */
 
 static void tick_cb(void* ctx) {
@@ -683,21 +794,19 @@ static void tick_cb(void* ctx) {
     AppModel* m = (AppModel*)view_get_model(app->view);
     m->anim++;
 
-    /* If we just entered AppStateDone via advance_to_next (not from EvtIrDone),
-     * save the file here on the first tick */
-    if(m->state == AppStateDone && m->saving) {
-        view_commit_model(app->view, true);
-        save_ir_file(m);
-        m = (AppModel*)view_get_model(app->view);
-        m->saving = false;
-        m->state  = AppStateSaved;
+    /* If we just entered Done (not via EvtIrDone path, e.g. after
+     * advance_to_next from AppStateFound/NotFound in the input_cb), save now */
+    if(m->state == AppStateDone) {
+        view_commit_model(app->view, true); /* show Done screen once */
+        save_from_model(app);               /* releases + re-acquires lock internally */
+        return;
     }
 
     view_commit_model(app->view, true);
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
-/*  Navigation callback — called if no view handles Back            */
+/*  Navigation callback — fallback exit                             */
 /* ══════════════════════════════════════════════════════════════════ */
 
 static bool nav_cb(void* ctx) {
@@ -716,36 +825,32 @@ int32_t sony_ir_search_app(void* p) {
     App* app = malloc(sizeof(App));
     memset(app, 0, sizeof(App));
 
-    /* View + model */
+    /* View */
     app->view = view_alloc();
     view_allocate_model(app->view, ViewModelTypeLocking, sizeof(AppModel));
     view_set_context(app->view, app);
     view_set_draw_callback(app->view, draw_cb);
     view_set_input_callback(app->view, input_cb);
 
-    /* Initialise model */
+    /* Initialise model — view_allocate_model zeroes memory, just set codes */
     AppModel* m = (AppModel*)view_get_model(app->view);
     m->state = AppStateWelcome;
-    for(uint8_t i = 0; i < NUM_FUNCS; i++) {
-        m->codes[i] = -1;
-        m->done[i]  = false;
-    }
+    for(uint8_t i = 0; i < NUM_FUNCS; i++) m->codes[i] = -1;
     view_commit_model(app->view, false);
 
     /* ViewDispatcher */
     app->vd = view_dispatcher_alloc();
+    view_dispatcher_set_event_callback_context(app->vd, app);
     view_dispatcher_set_custom_event_callback(app->vd, custom_event_cb);
     view_dispatcher_set_navigation_event_callback(app->vd, nav_cb);
-    view_dispatcher_set_tick_event_callback(app->vd, tick_cb, ANIM_PERIOD_MS);
-    view_dispatcher_set_event_callback_context(app->vd, app);
+    view_dispatcher_set_tick_event_callback(app->vd, tick_cb, ANIM_MS);
     view_dispatcher_add_view(app->vd, APP_VIEW, app->view);
     view_dispatcher_switch_to_view(app->vd, APP_VIEW);
 
-    /* Attach to GUI */
     app->gui = (Gui*)furi_record_open(RECORD_GUI);
     view_dispatcher_attach_to_gui(app->vd, app->gui, ViewDispatcherTypeFullscreen);
 
-    /* Run — blocks until view_dispatcher_stop() */
+    /* Block until view_dispatcher_stop() */
     view_dispatcher_run(app->vd);
 
     /* Cleanup */
