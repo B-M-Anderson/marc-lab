@@ -1,6 +1,6 @@
 App(
     appid="sony_ir_search",
-    name="Sony IR Finder",
+    name="IR Cracker",
     apptype=FlipperAppType.EXTERNAL,
     entry_point="sony_ir_search_app",
     requires=["gui", "storage", "notification"],
