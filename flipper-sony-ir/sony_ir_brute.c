@@ -511,6 +511,10 @@ static bool input_cb(InputEvent* ev, void* ctx) {
     /* ── Welcome ── */
     case AppStateWelcome:
         if(ev->key == InputKeyOk) {
+            m->fi    = 0;
+            m->lo    = CMD_MIN;
+            m->hi    = CMD_MAX;
+            m->round = 1;
             m->state = AppStateSending;
             redraw   = true;
             /* start IR thread after releasing model lock */
